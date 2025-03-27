@@ -1,6 +1,6 @@
 // =============== CONFIGURATION ===============
 const CONFIG = {
-    supabaseUrl: 'https://xovlfsqpxuvpbywtkrhc.supabase.co',
+    supabaseUrl: 'https://mtnjdjrlfamvpmnswumq.supabase.co',
     supabaseKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhvdmxmc3FweHV2cGJ5d3RrcmhjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDMwNjkxNTAsImV4cCI6MjA1ODY0NTE1MH0.TyQwETGYoOlSOfCczvRKndnzWP7dlI0urgyFvF3fIG0',
     fuelEfficiency: 11.47,
     users: {
@@ -92,6 +92,15 @@ function updateNetworkStatus() {
 
 async function testSupabaseConnection() {
     try {
+        // First try DNS resolution
+        await new Promise((resolve, reject) => {
+            const img = new Image();
+            img.onload = resolve;
+            img.onerror = reject;
+            img.src = `${CONFIG.supabaseUrl}/favicon.ico?${Date.now()}`;
+        });
+
+        // Then test API endpoint
         const response = await fetch(`${CONFIG.supabaseUrl}/rest/v1/`, {
             method: 'HEAD',
             headers: { 'apikey': CONFIG.supabaseKey }
@@ -107,7 +116,11 @@ async function testSupabaseConnection() {
 async function initializeSupabase() {
     try {
         if (!isOnline) throw new Error('Offline');
-        if (typeof supabase === 'undefined') throw new Error('Supabase not loaded');
+        if (typeof supabase === 'undefined') throw new Error('Supabase library not loaded');
+
+        // First verify DNS resolution
+        const canResolve = await canResolveDns(CONFIG.supabaseUrl);
+        if (!canResolve) throw new Error('DNS resolution failed');
 
         supabaseClient = supabase.createClient(
             CONFIG.supabaseUrl,
@@ -127,18 +140,49 @@ async function initializeSupabase() {
             }
         );
 
-        // Test connection
-        const isConnected = await testSupabaseConnection();
+        // Test connection with timeout
+        const isConnected = await withTimeout(testSupabaseConnection(), 5000);
         if (!isConnected) throw new Error('Cannot reach Supabase');
 
         return true;
     } catch (error) {
         console.error('Supabase init failed:', error);
-        showError(elements.loginError, 
-            'Failed to connect to database. ' +
-            'Please check your internet connection and refresh.');
+        
+        let errorMessage = 'Failed to connect to database. ';
+        if (error.message.includes('DNS resolution failed')) {
+            errorMessage += 'DNS resolution error. Please check:\n';
+            errorMessage += '1. Your internet connection\n';
+            errorMessage += '2. The Supabase URL is correct\n';
+            errorMessage += '3. DNS settings on your network';
+        } else {
+            errorMessage += 'Please check your internet connection and refresh.';
+        }
+        
+        showError(elements.loginError, errorMessage);
         return false;
     }
+}
+
+async function canResolveDns(url) {
+    try {
+        const domain = new URL(url).hostname;
+        await new Promise((resolve, reject) => {
+            const img = new Image();
+            img.onload = resolve;
+            img.onerror = reject;
+            img.src = `https://${domain}/favicon.ico?${Date.now()}`;
+        });
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+async function withTimeout(promise, ms) {
+    const timeout = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Timeout')), ms)
+    );
+    return Promise.race([promise, timeout]);
 }
 
 async function checkAuthState() {
@@ -190,14 +234,14 @@ async function handleLogin(e) {
         showElement(elements.loadingElement, true);
         hideError(elements.loginError);
 
-        // Add retry logic
+        // Add retry with exponential backoff
         const { error } = await withRetry(
             () => supabaseClient.auth.signInWithPassword({
                 email: `${username}@petroltracker.com`,
                 password: password
             }),
             3,  // 3 retries
-            1000 // 1 second delay
+            1000 // Initial 1 second delay
         );
 
         if (error) throw error;
@@ -216,7 +260,7 @@ async function handleLogin(e) {
             errorMessage += 'Network error. Please check:\n';
             errorMessage += '1. Your internet connection\n';
             errorMessage += '2. VPN/Firewall settings\n';
-            errorMessage += '3. Supabase project status';
+            errorMessage += '3. Try a different network';
         } else if (error.message.includes('Invalid')) {
             errorMessage = 'Invalid username or password';
         }
@@ -233,7 +277,7 @@ async function withRetry(fn, retries, delay) {
     } catch (error) {
         if (retries <= 0) throw error;
         await new Promise(resolve => setTimeout(resolve, delay));
-        return withRetry(fn, retries - 1, delay);
+        return withRetry(fn, retries - 1, delay * 2); // Exponential backoff
     }
 }
 
