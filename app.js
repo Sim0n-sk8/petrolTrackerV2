@@ -1,7 +1,11 @@
-// App Configuration
+// ======================
+// CONFIGURATION
+// ======================
 const CONFIG = {
-    supabaseUrl: 'https://mtnjdjrlfamvpmnswumq.supabase.co',
-    supabaseKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im10bmpkanJsZmFtdnBtbnN3dW1xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDMwOTY4NDUsImV4cCI6MjA1ODY3Mjg0NX0.IRS_oL_Jvkk0WEbozefFiZL5DIsFsVEgvmiljvzX_Ok',
+    // Replace with your actual Supabase URL
+    supabaseUrl: 'https://your-project-ref.supabase.co',
+    // Replace with your actual anon/public key
+    supabaseKey: 'your-anon-key-here',
     fuelEfficiency: 11.47, // km per liter
     users: {
         'Simon': { password: '@Ngrybirds71', isAdmin: true },
@@ -12,8 +16,11 @@ const CONFIG = {
     }
 };
 
-// DOM Elements
+// ======================
+// DOM ELEMENTS
+// ======================
 const elements = {
+    // Auth elements
     authContainer: document.getElementById('auth-container'),
     appContainer: document.getElementById('app-container'),
     loginError: document.getElementById('login-error'),
@@ -21,64 +28,33 @@ const elements = {
     passwordInput: document.getElementById('password'),
     currentUsername: document.getElementById('current-username'),
     adminBadge: document.getElementById('admin-badge'),
+    
+    // Trip form elements
     distanceInput: document.getElementById('distance'),
     petrolPriceInput: document.getElementById('petrolPrice'),
     resultElement: document.getElementById('result'),
+    tripForm: document.getElementById('trip-form'),
+    
+    // History elements
     tripsContainer: document.getElementById('trips'),
     totalElement: document.getElementById('total'),
     loadingElement: document.getElementById('loading'),
-    connectionStatus: document.createElement('div'),
-    tripForm: document.getElementById('trip-form'),
-    logoutBtn: document.getElementById('logout-btn'),
     clearHistoryBtn: document.getElementById('clear-history-btn'),
-    adminClearAllBtn: document.getElementById('admin-clear-all-btn')
+    adminClearAllBtn: document.getElementById('admin-clear-all-btn'),
+    
+    // Other
+    logoutBtn: document.getElementById('logout-btn')
 };
 
-// App State
+// ======================
+// APPLICATION STATE
+// ======================
 let currentUser = null;
 let supabaseClient = null;
-let isOnline = navigator.onLine;
 
-// Initialize Connection Status Indicator
-function initConnectionStatus() {
-    elements.connectionStatus.style.position = 'fixed';
-    elements.connectionStatus.style.bottom = '10px';
-    elements.connectionStatus.style.right = '10px';
-    elements.connectionStatus.style.padding = '8px 12px';
-    elements.connectionStatus.style.borderRadius = '4px';
-    elements.connectionStatus.style.fontSize = '14px';
-    updateConnectionStatus();
-    document.body.appendChild(elements.connectionStatus);
-}
-
-function updateConnectionStatus() {
-    if (isOnline) {
-        elements.connectionStatus.textContent = 'Online';
-        elements.connectionStatus.style.backgroundColor = '#4CAF50';
-        elements.connectionStatus.style.color = 'white';
-    } else {
-        elements.connectionStatus.textContent = 'Offline';
-        elements.connectionStatus.style.backgroundColor = '#f44336';
-        elements.connectionStatus.style.color = 'white';
-    }
-}
-
-// Network Event Listeners
-window.addEventListener('online', () => {
-    isOnline = true;
-    updateConnectionStatus();
-    hideError(elements.loginError);
-    console.log('Connection restored');
-});
-
-window.addEventListener('offline', () => {
-    isOnline = false;
-    updateConnectionStatus();
-    showError(elements.loginError, 'You are offline. Please check your connection.');
-    console.log('Connection lost');
-});
-
-// Utility Functions
+// ======================
+// UTILITY FUNCTIONS
+// ======================
 function showElement(element, show = true) {
     element.classList.toggle('hidden', !show);
 }
@@ -89,6 +65,7 @@ function showError(element, message) {
 }
 
 function hideError(element) {
+    element.textContent = '';
     showElement(element, false);
 }
 
@@ -98,26 +75,43 @@ function showResult(message, color = '#4a6cf7') {
     setTimeout(() => elements.resultElement.textContent = '', 5000);
 }
 
-// Supabase Initialization with Enhanced Retry Logic
+function showAuth() {
+    elements.authContainer.classList.remove('hidden');
+    elements.appContainer.classList.add('hidden');
+    elements.usernameInput.value = '';
+    elements.passwordInput.value = '';
+    hideError(elements.loginError);
+}
+
+function showApp() {
+    elements.authContainer.classList.add('hidden');
+    elements.appContainer.classList.remove('hidden');
+    elements.currentUsername.textContent = currentUser.username;
+    showElement(elements.adminBadge, currentUser.isAdmin);
+    showElement(elements.adminClearAllBtn, currentUser.isAdmin);
+    loadTrips();
+}
+
+// ======================
+// SUPABASE INITIALIZATION
+// ======================
 async function initializeSupabase() {
-    const MAX_RETRIES = 5;
+    const MAX_RETRIES = 3;
     let retryCount = 0;
     
     while (retryCount < MAX_RETRIES) {
         try {
-            if (!window.supabase) {
-                await new Promise(resolve => setTimeout(resolve, 1500 * (retryCount + 1)));
-                retryCount++;
-                continue;
+            if (typeof supabase === 'undefined') {
+                throw new Error('Supabase library not loaded');
             }
             
-            const initPromise = window.supabase.createClient(
+            supabaseClient = supabase.createClient(
                 CONFIG.supabaseUrl,
                 CONFIG.supabaseKey,
                 {
                     auth: {
-                        autoRefreshToken: true,
                         persistSession: true,
+                        autoRefreshToken: true,
                         detectSessionInUrl: true
                     },
                     global: {
@@ -129,32 +123,25 @@ async function initializeSupabase() {
                 }
             );
             
-            const timeoutPromise = new Promise((_, reject) => 
-                setTimeout(() => reject(new Error('Connection timeout')), 10000)
-            );
+            // Test connection
+            const { error } = await supabaseClient.auth.getSession();
+            if (error) throw error;
             
-            supabaseClient = await Promise.race([initPromise, timeoutPromise]);
-            
-            // Test connection with timeout
-            const testPromise = supabaseClient.auth.getSession();
-            const testTimeout = new Promise((_, reject) => 
-                setTimeout(() => reject(new Error('Connection test timeout')), 8000)
-            );
-            
-            await Promise.race([testPromise, testTimeout]);
             return true;
         } catch (error) {
             console.error(`Supabase init attempt ${retryCount + 1} failed:`, error);
             retryCount++;
             if (retryCount >= MAX_RETRIES) {
-                throw new Error('Failed to connect to the server after multiple attempts. Please check your internet connection or try again later.');
+                throw new Error('Failed to connect to Supabase after multiple attempts');
             }
-            await new Promise(resolve => setTimeout(resolve, 2000 * Math.pow(2, retryCount)));
+            await new Promise(resolve => setTimeout(resolve, 2000 * (retryCount + 1)));
         }
     }
 }
 
-// Authentication Functions
+// ======================
+// AUTHENTICATION FUNCTIONS
+// ======================
 async function checkAuthState() {
     try {
         const { data: { user }, error } = await supabaseClient.auth.getUser();
@@ -205,39 +192,36 @@ async function handleLogin(e) {
         });
 
         const timeoutPromise = new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Login timeout. Server is not responding.')), 15000)
+            setTimeout(() => reject(new Error('Login timeout')), 15000)
         );
 
         const { error } = await Promise.race([loginPromise, timeoutPromise]);
 
         if (error) {
-            if (error.status === 0) {
-                throw new Error('Network error. Could not reach the server.');
-            } else if (error.message.includes('Invalid')) {
-                throw new Error('Invalid credentials');
-            } else {
-                throw error;
+            if (error.message.includes('Failed to fetch')) {
+                throw new Error('Network error - could not reach server');
             }
+            throw error;
         }
 
-        currentUser = { 
-            username, 
-            isAdmin: CONFIG.users[username].isAdmin 
+        currentUser = {
+            username,
+            isAdmin: CONFIG.users[username].isAdmin
         };
         showApp();
     } catch (error) {
         console.error('Login failed:', error);
         
-        let errorMessage = 'Login failed. Please try again.';
-        if (error.message.includes('Network error') || 
-            error.message.includes('Failed to fetch') ||
-            error.message.includes('timeout')) {
-            errorMessage = 'Network issue detected. Please check:';
+        let errorMessage = 'Login failed. ';
+        if (error.message.includes('Network error') || error.message.includes('Failed to fetch')) {
+            errorMessage += 'Network issues detected. Please check:';
             errorMessage += '\n1. Your internet connection';
             errorMessage += '\n2. If you\'re behind a firewall/proxy';
-            errorMessage += '\n3. Try refreshing the page';
-        } else if (error.message.includes('Invalid credentials')) {
+            errorMessage += '\n3. The Supabase project URL is correct';
+        } else if (error.message.includes('Invalid')) {
             errorMessage = 'Invalid username or password';
+        } else if (error.message.includes('timeout')) {
+            errorMessage = 'Server is not responding. Please try again later.';
         }
         
         showError(elements.loginError, errorMessage);
@@ -257,7 +241,9 @@ async function handleLogout() {
     }
 }
 
-// Trip Functions
+// ======================
+// TRIP FUNCTIONS
+// ======================
 async function handleTripSubmit(e) {
     e.preventDefault();
     
@@ -418,50 +404,30 @@ async function handleAdminClearAll() {
     }
 }
 
-// UI Functions
-function showAuth() {
-    elements.authContainer.classList.remove('hidden');
-    elements.appContainer.classList.add('hidden');
-    elements.usernameInput.value = '';
-    elements.passwordInput.value = '';
-    hideError(elements.loginError);
+// ======================
+// EVENT LISTENERS
+// ======================
+function setupEventListeners() {
+    // Auth listeners
+    document.getElementById('login-btn').addEventListener('click', handleLogin);
+    elements.logoutBtn.addEventListener('click', handleLogout);
+    
+    // Trip listeners
+    elements.tripForm.addEventListener('submit', handleTripSubmit);
+    elements.clearHistoryBtn.addEventListener('click', handleClearHistory);
+    elements.adminClearAllBtn.addEventListener('click', handleAdminClearAll);
 }
 
-function showApp() {
-    elements.authContainer.classList.add('hidden');
-    elements.appContainer.classList.remove('hidden');
-    elements.currentUsername.textContent = currentUser.username;
-    showElement(elements.adminBadge, currentUser.isAdmin);
-    showElement(elements.adminClearAllBtn, currentUser.isAdmin);
-    loadTrips();
-}
-
-// Initialize Application
+// ======================
+// INITIALIZATION
+// ======================
 async function initializeApp() {
     try {
-        // Initialize connection status indicator
-        initConnectionStatus();
-        
-        // Check online status
-        if (!isOnline) {
-            showError(elements.loginError, 'You are currently offline. Please connect to the internet.');
-            return;
-        }
-
         // Check if running on file protocol
         if (window.location.protocol === 'file:') {
-            showError(elements.loginError, 'This app must be run on a web server (not file://). Try using Live Server in VS Code.');
-            return;
-        }
-
-        // Check CORS availability
-        try {
-            const testResponse = await fetch(CONFIG.supabaseUrl, { method: 'HEAD' });
-            if (!testResponse.ok) {
-                throw new Error('Server not responding properly');
-            }
-        } catch (e) {
-            showError(elements.loginError, 'Cannot connect to server. Possible network restrictions. Try: 1. Different browser 2. Different network 3. Disabling VPN');
+            showError(elements.loginError, 
+                'This app must be run on a web server (not file://).\n' +
+                'Use VS Code Live Server or similar.');
             return;
         }
 
@@ -469,28 +435,17 @@ async function initializeApp() {
         await initializeSupabase();
         
         // Setup event listeners
-        document.getElementById('login-btn').addEventListener('click', handleLogin);
-        elements.logoutBtn.addEventListener('click', handleLogout);
-        elements.tripForm.addEventListener('submit', handleTripSubmit);
-        elements.clearHistoryBtn.addEventListener('click', handleClearHistory);
-        elements.adminClearAllBtn.addEventListener('click', handleAdminClearAll);
+        setupEventListeners();
         
         // Check auth state
         await checkAuthState();
     } catch (error) {
         console.error('App initialization failed:', error);
-        let errorMessage = 'Application error. Please refresh the page.';
-        if (error.message.includes('CORS')) {
-            errorMessage = 'Cross-origin error. Try:';
-            errorMessage += '\n1. Using Chrome/Firefox';
-            errorMessage += '\n2. Disabling browser extensions';
-            errorMessage += '\n3. Checking your network settings';
-        } else if (error.message.includes('timeout')) {
-            errorMessage = 'Server is not responding. Try again later.';
-        }
-        showError(elements.loginError, errorMessage);
+        showError(elements.loginError, 
+            'Failed to initialize application.\n' +
+            'Please check your network connection and refresh the page.');
     }
 }
 
-// Start the app when DOM is fully loaded
+// Start the application
 document.addEventListener('DOMContentLoaded', initializeApp);
