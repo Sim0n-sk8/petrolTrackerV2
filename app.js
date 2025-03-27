@@ -1,124 +1,90 @@
-// Configuration (ideally moved to a separate, secure backend in production)
+// Configuration
 const CONFIG = {
     SUPABASE_URL: 'https://mtnjdjrlfamvpmnswumq.supabase.co',
     SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im10bmpkanJsZmFtdnBtbnN3dW1xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDMwOTY4NDUsImV4cCI6MjA1ODY3Mjg0NX0.IRS_oL_Jvkk0WEbozefFiZL5DIsFsVEgvmiljvzX_Ok',
-    FUEL_EFFICIENCY: 11.47
+    FUEL_EFFICIENCY: 11.47,
+    ADMIN_USERS: ['simon']
 };
 
-// Main Application Class
-class PetrolTrackerApp {
+class PetrolCostTracker {
     constructor() {
-        // DOM Element Caching
+        // DOM Element References
         this.elements = {
             authContainer: document.getElementById('auth-container'),
             appContainer: document.getElementById('app-container'),
             loginForm: document.getElementById('login-form'),
+            loginBtn: document.getElementById('login-btn'),
+            loginError: document.getElementById('login-error'),
             usernameInput: document.getElementById('username'),
             passwordInput: document.getElementById('password'),
-            loginError: document.getElementById('login-error'),
-            currentUserDisplay: document.getElementById('current-user'),
+            
+            currentUsername: document.getElementById('current-username'),
             adminBadge: document.getElementById('admin-badge'),
-            logoutButton: document.getElementById('logout-btn'),
-            distanceInput: document.getElementById('distance'),
-            petrolPriceInput: document.getElementById('petrol-price'),
+            logoutBtn: document.getElementById('logout-btn'),
+            
             tripForm: document.getElementById('trip-form'),
-            resultDisplay: document.getElementById('result'),
-            tripsContainer: document.getElementById('trips-container'),
-            totalSpentDisplay: document.getElementById('total-spent'),
-            loadingIndicator: document.getElementById('loading-indicator'),
-            clearHistoryButton: document.getElementById('clear-history-btn'),
-            adminClearAllButton: document.getElementById('admin-clear-all-btn')
+            distanceInput: document.getElementById('distance'),
+            petrolPriceInput: document.getElementById('petrolPrice'),
+            
+            resultContainer: document.getElementById('result'),
+            loadingIndicator: document.getElementById('loading'),
+            tripsContainer: document.getElementById('trips'),
+            totalSpentDisplay: document.getElementById('total'),
+            
+            clearHistoryBtn: document.getElementById('clear-history-btn'),
+            adminClearAllBtn: document.getElementById('admin-clear-all-btn')
         };
 
-        // User authentication state
         this.currentUser = null;
-
-        // Supabase client (will be initialized in setup)
         this.supabaseClient = null;
 
-        // Bind methods to maintain correct context
-        this.bindMethods();
-
-        // Verify DOM elements
-        this.validateDOMElements();
+        this.initializeEventListeners();
     }
 
-    // Bind methods to maintain correct 'this' context
-    bindMethods() {
-        this.handleLogin = this.handleLogin.bind(this);
-        this.handleLogout = this.handleLogout.bind(this);
-        this.handleTripSubmit = this.handleTripSubmit.bind(this);
-        this.handleClearHistory = this.handleClearHistory.bind(this);
-        this.handleAdminClearAll = this.handleAdminClearAll.bind(this);
-    }
-
-    // Validate that all required DOM elements exist
-    validateDOMElements() {
-        for (const [key, element] of Object.entries(this.elements)) {
-            if (!element) {
-                console.error(`Missing DOM element: ${key}`);
-                throw new Error(`Missing DOM element: ${key}`);
-            }
-        }
-    }
-
-    // Initialize the application
-    async init() {
+    async initialize() {
         // Initialize Supabase client
         this.supabaseClient = supabase.createClient(
             CONFIG.SUPABASE_URL, 
             CONFIG.SUPABASE_ANON_KEY
         );
 
-        // Setup event listeners
-        this.setupEventListeners();
-
         // Check initial authentication state
         await this.checkAuthState();
     }
 
-    // Setup all event listeners
-    setupEventListeners() {
-        this.elements.loginForm.addEventListener('submit', this.handleLogin);
-        this.elements.logoutButton.addEventListener('click', this.handleLogout);
-        this.elements.tripForm.addEventListener('submit', this.handleTripSubmit);
-        this.elements.clearHistoryButton.addEventListener('click', this.handleClearHistory);
-        this.elements.adminClearAllButton.addEventListener('click', this.handleAdminClearAll);
+    initializeEventListeners() {
+        this.elements.loginBtn.addEventListener('click', this.handleLogin.bind(this));
+        this.elements.logoutBtn.addEventListener('click', this.handleLogout.bind(this));
+        this.elements.tripForm.addEventListener('submit', this.handleTripSubmission.bind(this));
+        this.elements.clearHistoryBtn.addEventListener('click', this.clearUserHistory.bind(this));
+        this.elements.adminClearAllBtn.addEventListener('click', this.adminClearAllHistory.bind(this));
     }
 
-    // Utility method to show/hide elements
-    toggleElementVisibility(element, show = true) {
-        element.classList.toggle('hidden', !show);
-    }
-
-    // Display messages to user
-    displayMessage(element, message, isError = false) {
-        element.textContent = message;
-        element.style.color = isError ? '#d32f2f' : '#4a6cf7';
-        this.toggleElementVisibility(element, true);
-        
-        if (!isError) {
-            setTimeout(() => this.toggleElementVisibility(element, false), 5000);
+    // Toggle visibility of elements
+    toggleVisibility(element, isVisible) {
+        if (element) {
+            element.classList.toggle('hidden', !isVisible);
         }
     }
 
+    // Display error messages
+    displayError(message) {
+        this.elements.loginError.textContent = message;
+        this.toggleVisibility(this.elements.loginError, true);
+    }
+
     // Handle user login
-    async handleLogin(e) {
-        e.preventDefault();
-        
+    async handleLogin() {
         const username = this.elements.usernameInput.value.trim().toLowerCase();
         const password = this.elements.passwordInput.value;
 
         // Basic validation
         if (!username || !password) {
-            this.displayMessage(this.elements.loginError, 'Please enter both username and password', true);
+            this.displayError('Please enter both username and password');
             return;
         }
 
         try {
-            this.toggleElementVisibility(this.elements.loadingIndicator, true);
-            this.elements.loginError.textContent = '';
-
             // Attempt Supabase authentication
             const { data, error } = await this.supabaseClient.auth.signInWithPassword({
                 email: `${username}@petroltracker.com`,
@@ -130,27 +96,16 @@ class PetrolTrackerApp {
             // Set current user
             this.currentUser = {
                 username: username.charAt(0).toUpperCase() + username.slice(1),
-                isAdmin: this.isUserAdmin(username)
+                isAdmin: CONFIG.ADMIN_USERS.includes(username)
             };
-            
+
             // Show app screen
             this.showAppScreen();
             
         } catch (error) {
             console.error('Login error:', error);
-            const message = error.message.includes('Invalid login credentials') 
-                ? 'Invalid username or password' 
-                : 'Login failed: ' + error.message;
-            this.displayMessage(this.elements.loginError, message, true);
-        } finally {
-            this.toggleElementVisibility(this.elements.loadingIndicator, false);
+            this.displayError('Invalid username or password');
         }
-    }
-
-    // Check if user is an admin (simplified for this example)
-    isUserAdmin(username) {
-        const adminUsers = ['simon'];
-        return adminUsers.includes(username);
     }
 
     // Handle user logout
@@ -161,84 +116,119 @@ class PetrolTrackerApp {
             this.showAuthScreen();
         } catch (error) {
             console.error('Logout failed:', error);
-            this.displayMessage(this.elements.resultDisplay, 'Logout failed. Please try again.', true);
+            alert('Logout failed. Please try again.');
         }
     }
 
-    // Submit a new trip
-    async handleTripSubmit(e) {
-        e.preventDefault();
+    // Show authentication screen
+    showAuthScreen() {
+        this.toggleVisibility(this.elements.authContainer, true);
+        this.toggleVisibility(this.elements.appContainer, false);
+        
+        // Reset login form
+        this.elements.usernameInput.value = '';
+        this.elements.passwordInput.value = '';
+        this.elements.loginError.textContent = '';
+    }
+
+    // Show application screen
+    showAppScreen() {
+        this.toggleVisibility(this.elements.authContainer, false);
+        this.toggleVisibility(this.elements.appContainer, true);
+
+        // Update user info
+        this.elements.currentUsername.textContent = this.currentUser.username;
+        this.toggleVisibility(this.elements.adminBadge, this.currentUser.isAdmin);
+        this.toggleVisibility(this.elements.adminClearAllBtn, this.currentUser.isAdmin);
+
+        // Load trip history
+        this.loadTripHistory();
+    }
+
+    // Handle trip submission
+    async handleTripSubmission(event) {
+        event.preventDefault();
         
         const distance = parseFloat(this.elements.distanceInput.value);
         const petrolPrice = parseFloat(this.elements.petrolPriceInput.value);
 
         // Validate inputs
         if (isNaN(distance) || distance <= 0) {
-            this.displayMessage(this.elements.resultDisplay, 'Please enter a valid distance', true);
+            this.displayTripError('Please enter a valid distance');
             return;
         }
 
         if (isNaN(petrolPrice) || petrolPrice <= 0) {
-            this.displayMessage(this.elements.resultDisplay, 'Please enter a valid petrol price', true);
+            this.displayTripError('Please enter a valid petrol price');
             return;
         }
 
         try {
-            this.toggleElementVisibility(this.elements.loadingIndicator, true);
-            
-            // Calculate total cost
-            const totalCost = (distance / CONFIG.FUEL_EFFICIENCY) * petrolPrice;
+            // Calculate trip cost
+            const literesUsed = distance / CONFIG.FUEL_EFFICIENCY;
+            const totalCost = literesUsed * petrolPrice;
 
             // Get current user
             const { data: { user }, error: userError } = await this.supabaseClient.auth.getUser();
             if (userError) throw userError;
 
-            // Insert trip record
+            // Save trip to database
             const { error } = await this.supabaseClient
                 .from('trips')
                 .insert({
                     user_id: user.id,
                     distance,
                     petrol_price: petrolPrice,
-                    total_cost: parseFloat(totalCost.toFixed(2))
+                    total_cost: parseFloat(totalCost.toFixed(2)),
+                    litres_used: parseFloat(literesUsed.toFixed(2))
                 });
 
             if (error) throw error;
 
-            // Success message and reset form
-            this.displayMessage(this.elements.resultDisplay, `Trip recorded: R${totalCost.toFixed(2)}`);
+            // Display result
+            this.elements.resultContainer.innerHTML = `
+                <p>Trip Cost: R${totalCost.toFixed(2)}</p>
+                <p>Distance: ${distance} km</p>
+                <p>Petrol Price: R${petrolPrice.toFixed(2)}/L</p>
+                <p>Litres Used: ${literesUsed.toFixed(2)} L</p>
+            `;
+
+            // Reset form
             this.elements.distanceInput.value = '';
             this.elements.petrolPriceInput.value = '';
-            
-            // Reload trips
-            await this.loadTrips();
+
+            // Reload trip history
+            await this.loadTripHistory();
 
         } catch (error) {
-            console.error('Error saving trip:', error);
-            this.displayMessage(this.elements.resultDisplay, 'Error saving trip: ' + error.message, true);
-        } finally {
-            this.toggleElementVisibility(this.elements.loadingIndicator, false);
+            console.error('Trip submission error:', error);
+            this.displayTripError('Failed to record trip. Please try again.');
         }
     }
 
-    // Load user trips
-    async loadTrips() {
-        if (!this.currentUser) return;
+    // Display trip-related errors
+    displayTripError(message) {
+        this.elements.resultContainer.innerHTML = `<p class="error">${message}</p>`;
+    }
 
+    // Load trip history
+    async loadTripHistory() {
         try {
-            this.toggleElementVisibility(this.elements.loadingIndicator, true);
+            // Show loading indicator
+            this.toggleVisibility(this.elements.loadingIndicator, true);
             this.elements.tripsContainer.innerHTML = '';
 
             // Get current user
             const { data: { user }, error: userError } = await this.supabaseClient.auth.getUser();
             if (userError) throw userError;
 
-            // Prepare query based on admin status
+            // Prepare query
             let query = this.supabaseClient
                 .from('trips')
                 .select('*')
                 .order('created_at', { ascending: false });
 
+            // Filter by user if not admin
             if (!this.currentUser.isAdmin) {
                 query = query.eq('user_id', user.id);
             }
@@ -249,15 +239,16 @@ class PetrolTrackerApp {
 
             // Handle empty state
             if (!trips || trips.length === 0) {
-                this.elements.tripsContainer.innerHTML = '<div class="empty-state">No trips recorded yet</div>';
-                this.elements.totalSpentDisplay.textContent = 'R0.00';
+                this.elements.tripsContainer.innerHTML = '<p>No trips recorded</p>';
+                this.elements.totalSpentDisplay.textContent = 'Total Spent: R0.00';
                 return;
             }
 
             // Render trips
+            let totalSpent = 0;
             trips.forEach(trip => {
                 const tripElement = document.createElement('div');
-                tripElement.className = 'trip-item';
+                tripElement.classList.add('trip-item');
                 tripElement.innerHTML = `
                     <div class="trip-date">${new Date(trip.created_at).toLocaleDateString()}</div>
                     <div class="trip-details">
@@ -267,27 +258,26 @@ class PetrolTrackerApp {
                     <div class="trip-cost">R${trip.total_cost.toFixed(2)}</div>
                 `;
                 this.elements.tripsContainer.appendChild(tripElement);
+                totalSpent += trip.total_cost;
             });
 
-            // Calculate and display total spent
-            const totalSpent = trips.reduce((sum, trip) => sum + trip.total_cost, 0);
-            this.elements.totalSpentDisplay.textContent = `R${totalSpent.toFixed(2)}`;
+            // Update total spent
+            this.elements.totalSpentDisplay.textContent = `Total Spent: R${totalSpent.toFixed(2)}`;
 
         } catch (error) {
-            console.error('Error loading trips:', error);
-            this.elements.tripsContainer.innerHTML = '<div class="error-state">Error loading trips</div>';
+            console.error('Failed to load trip history:', error);
+            this.elements.tripsContainer.innerHTML = '<p class="error">Failed to load trip history</p>';
         } finally {
-            this.toggleElementVisibility(this.elements.loadingIndicator, false);
+            // Hide loading indicator
+            this.toggleVisibility(this.elements.loadingIndicator, false);
         }
     }
 
     // Clear user's trip history
-    async handleClearHistory() {
-        if (!this.currentUser || !confirm('Are you sure you want to clear your trip history?')) return;
+    async clearUserHistory() {
+        if (!confirm('Are you sure you want to clear your trip history?')) return;
 
         try {
-            this.toggleElementVisibility(this.elements.loadingIndicator, true);
-            
             // Get current user
             const { data: { user }, error: userError } = await this.supabaseClient.auth.getUser();
             if (userError) throw userError;
@@ -300,24 +290,21 @@ class PetrolTrackerApp {
 
             if (error) throw error;
 
-            this.displayMessage(this.elements.resultDisplay, 'Your trip history has been cleared');
-            await this.loadTrips();
+            // Reload trip history
+            await this.loadTripHistory();
+            alert('Your trip history has been cleared');
 
         } catch (error) {
-            console.error('Error clearing history:', error);
-            this.displayMessage(this.elements.resultDisplay, 'Error clearing history', true);
-        } finally {
-            this.toggleElementVisibility(this.elements.loadingIndicator, false);
+            console.error('Failed to clear history:', error);
+            alert('Failed to clear trip history');
         }
     }
 
     // Admin function to clear all trips
-    async handleAdminClearAll() {
-        if (!this.currentUser?.isAdmin || !confirm('Are you sure you want to clear ALL trip history?')) return;
+    async adminClearAllHistory() {
+        if (!this.currentUser.isAdmin || !confirm('Are you sure you want to clear ALL trip history?')) return;
 
         try {
-            this.toggleElementVisibility(this.elements.loadingIndicator, true);
-            
             // Delete all trips
             const { error } = await this.supabaseClient
                 .from('trips')
@@ -326,34 +313,14 @@ class PetrolTrackerApp {
 
             if (error) throw error;
 
-            this.displayMessage(this.elements.resultDisplay, 'All trip history has been cleared');
-            await this.loadTrips();
+            // Reload trip history
+            await this.loadTripHistory();
+            alert('All trip history has been cleared');
 
         } catch (error) {
-            console.error('Error clearing all history:', error);
-            this.displayMessage(this.elements.resultDisplay, 'Error clearing all history', true);
-        } finally {
-            this.toggleElementVisibility(this.elements.loadingIndicator, false);
+            console.error('Failed to clear all history:', error);
+            alert('Failed to clear all trip history');
         }
-    }
-
-    // Show authentication screen
-    showAuthScreen() {
-        this.toggleElementVisibility(this.elements.authContainer, true);
-        this.toggleElementVisibility(this.elements.appContainer, false);
-        this.elements.usernameInput.value = '';
-        this.elements.passwordInput.value = '';
-        this.elements.loginError.textContent = '';
-    }
-
-    // Show application screen
-    showAppScreen() {
-        this.toggleElementVisibility(this.elements.authContainer, false);
-        this.toggleElementVisibility(this.elements.appContainer, true);
-        this.elements.currentUserDisplay.textContent = this.currentUser.username;
-        this.toggleElementVisibility(this.elements.adminBadge, this.currentUser.isAdmin);
-        this.toggleElementVisibility(this.elements.adminClearAllButton, this.currentUser.isAdmin);
-        this.loadTrips();
     }
 
     // Check initial authentication state
@@ -365,7 +332,7 @@ class PetrolTrackerApp {
             
             this.currentUser = {
                 username: username.charAt(0).toUpperCase() + username.slice(1),
-                isAdmin: this.isUserAdmin(username)
+                isAdmin: CONFIG.ADMIN_USERS.includes(username)
             };
             this.showAppScreen();
         } else {
@@ -374,14 +341,8 @@ class PetrolTrackerApp {
     }
 }
 
-// Application Initialization
+// Initialize the application when the DOM is fully loaded
 document.addEventListener('DOMContentLoaded', async () => {
-    try {
-        // Create and initialize the application
-        const app = new PetrolTrackerApp();
-        await app.init();
-    } catch (error) {
-        console.error('Application initialization failed:', error);
-        alert('Failed to initialize the application. Please reload the page.');
-    }
+    const tracker = new PetrolCostTracker();
+    await tracker.initialize();
 });
