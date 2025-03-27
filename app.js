@@ -12,6 +12,9 @@ const CONFIG = {
     }
 };
 
+// =============== INITIALIZE SUPABASE CLIENT ===============
+const supabase = supabase.createClient(CONFIG.supabaseUrl, CONFIG.supabaseKey);
+
 // =============== DOM ELEMENTS ===============
 const elements = {
     authContainer: document.getElementById('auth-container'),
@@ -36,7 +39,6 @@ const elements = {
 
 // =============== APPLICATION STATE ===============
 let currentUser = null;
-let supabaseClient = null;
 
 // =============== UTILITY FUNCTIONS ===============
 function showElement(element, show = true) {
@@ -52,70 +54,7 @@ function displayMessage(element, message, isError = false) {
     }
 }
 
-// =============== SUPABASE INITIALIZATION ===============
-async function initializeSupabase() {
-    try {
-        // Load Supabase client if not already available
-        if (typeof supabase === 'undefined') {
-            await new Promise((resolve, reject) => {
-                const script = document.createElement('script');
-                script.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
-                script.onload = resolve;
-                script.onerror = reject;
-                document.head.appendChild(script);
-            });
-        }
-
-        // Create Supabase client
-        supabaseClient = supabase.createClient(CONFIG.supabaseUrl, CONFIG.supabaseKey, {
-            auth: {
-                persistSession: true,
-                autoRefreshToken: true,
-                detectSessionInUrl: true
-            }
-        });
-
-        // Test connection
-        const { error } = await supabaseClient.from('trips').select('*').limit(1);
-        if (error) throw error;
-
-        return true;
-    } catch (error) {
-        console.error('Supabase initialization failed:', error);
-        displayMessage(elements.loginError, 'Failed to connect to database. Please try again later.', true);
-        return false;
-    }
-}
-
 // =============== AUTHENTICATION FUNCTIONS ===============
-async function checkAuthState() {
-    try {
-        const { data: { user }, error } = await supabaseClient.auth.getUser();
-        
-        if (error || !user) {
-            showAuthScreen();
-            return;
-        }
-
-        // Extract username from email
-        const username = user.email.split('@')[0].toLowerCase();
-        
-        if (CONFIG.users[username]) {
-            currentUser = {
-                username: username.charAt(0).toUpperCase() + username.slice(1),
-                isAdmin: CONFIG.users[username].isAdmin
-            };
-            showAppScreen();
-        } else {
-            await supabaseClient.auth.signOut();
-            showAuthScreen();
-        }
-    } catch (error) {
-        console.error('Auth check failed:', error);
-        showAuthScreen();
-    }
-}
-
 async function handleLogin(e) {
     e.preventDefault();
     
@@ -136,13 +75,13 @@ async function handleLogin(e) {
 
     try {
         showElement(elements.loadingIndicator, true);
-        hideError(elements.loginError);
+        elements.loginError.textContent = '';
 
         // Construct the exact email address
         const email = `${username}@petroltracker.com`;
         
         // Sign in with Supabase
-        const { error } = await supabaseClient.auth.signInWithPassword({
+        const { error } = await supabase.auth.signInWithPassword({
             email: email,
             password: password
         });
@@ -160,11 +99,8 @@ async function handleLogin(e) {
     } catch (error) {
         console.error('Login error:', error);
         
-        // Specific error messages
         if (error.message.includes('Invalid login credentials')) {
             displayMessage(elements.loginError, 'Invalid password. Please try again.', true);
-        } else if (error.message.includes('Email not confirmed')) {
-            displayMessage(elements.loginError, 'Please verify your email first.', true);
         } else {
             displayMessage(elements.loginError, 'Login failed: ' + error.message, true);
         }
@@ -175,7 +111,7 @@ async function handleLogin(e) {
 
 async function handleLogout() {
     try {
-        await supabaseClient.auth.signOut();
+        await supabase.auth.signOut();
         currentUser = null;
         showAuthScreen();
     } catch (error) {
@@ -205,15 +141,38 @@ async function handleTripSubmit(e) {
         showElement(elements.loadingIndicator, true);
         const totalCost = (distance / CONFIG.fuelEfficiency) * petrolPrice;
 
-        // Get the current authenticated user
-        const { data: { user }, error: userError } = await supabaseClient.auth.getUser();
+        // Get authenticated user
+        const { data: { user }, error: userError } = await supabase.auth.getUser();
         if (userError) throw userError;
 
-        // Insert the trip record
-        const { error } = await supabaseClient
+        // Find or create user in our mapping table
+        let { data: localUser, error: lookupError } = await supabase
+            .from('users')
+            .select('id')
+            .eq('supabase_uid', user.id)
+            .single();
+
+        if (lookupError || !localUser) {
+            // Create new user mapping if doesn't exist
+            const { data: newUser, error: createError } = await supabase
+                .from('users')
+                .insert([{
+                    supabase_uid: user.id,
+                    username: user.email.split('@')[0],
+                    is_admin: CONFIG.users[user.email.split('@')[0]]?.isAdmin || false
+                }])
+                .select()
+                .single();
+
+            if (createError) throw createError;
+            localUser = newUser;
+        }
+
+        // Insert trip record
+        const { error } = await supabase
             .from('trips')
             .insert([{
-                user_id: user.id, // Using UUID from auth
+                user_id: localUser.id,
                 distance: distance,
                 petrol_price: petrolPrice,
                 total_cost: parseFloat(totalCost.toFixed(2))
@@ -221,7 +180,7 @@ async function handleTripSubmit(e) {
 
         if (error) throw error;
 
-        displayMessage(elements.resultDisplay, `Amount Owed: R${totalCost.toFixed(2)}`);
+        displayMessage(elements.resultDisplay, `Trip recorded: R${totalCost.toFixed(2)}`);
         elements.distanceInput.value = '';
         elements.petrolPriceInput.value = '';
         await loadTrips();
@@ -240,18 +199,22 @@ async function loadTrips() {
         showElement(elements.loadingIndicator, true);
         elements.tripsContainer.innerHTML = '';
 
-        // Get the current authenticated user
-        const { data: { user }, error: userError } = await supabaseClient.auth.getUser();
+        // Get authenticated user
+        const { data: { user }, error: userError } = await supabase.auth.getUser();
         if (userError) throw userError;
 
-        let query = supabaseClient
+        let query = supabase
             .from('trips')
             .select('*')
             .order('created_at', { ascending: false });
 
         // If not admin, only show current user's trips
         if (!currentUser.isAdmin) {
-            query = query.eq('user_id', user.id);
+            query = query.eq('user_id', 
+                supabase.from('users')
+                .select('id')
+                .eq('supabase_uid', user.id)
+            );
         }
 
         const { data: trips, error } = await query;
@@ -295,14 +258,23 @@ async function handleClearHistory() {
     try {
         showElement(elements.loadingIndicator, true);
         
-        // Get the current authenticated user
-        const { data: { user }, error: userError } = await supabaseClient.auth.getUser();
+        // Get authenticated user
+        const { data: { user }, error: userError } = await supabase.auth.getUser();
         if (userError) throw userError;
 
-        const { error } = await supabaseClient
+        // Get user's numeric ID
+        const { data: localUser, error: lookupError } = await supabase
+            .from('users')
+            .select('id')
+            .eq('supabase_uid', user.id)
+            .single();
+
+        if (lookupError || !localUser) throw lookupError || new Error('User not found');
+
+        const { error } = await supabase
             .from('trips')
             .delete()
-            .eq('user_id', user.id);
+            .eq('user_id', localUser.id);
 
         if (error) throw error;
 
@@ -322,10 +294,10 @@ async function handleAdminClearAll() {
     try {
         showElement(elements.loadingIndicator, true);
         
-        const { error } = await supabaseClient
+        const { error } = await supabase
             .from('trips')
             .delete()
-            .neq('id', 0); // Delete all trips
+            .neq('id', 0);
 
         if (error) throw error;
 
@@ -369,15 +341,28 @@ function setupEventListeners() {
 // =============== APPLICATION INITIALIZATION ===============
 async function initializeApp() {
     try {
-        // Initialize Supabase
-        const supabaseReady = await initializeSupabase();
-        if (!supabaseReady) return;
-
         // Setup event listeners
         setupEventListeners();
 
         // Check auth state
-        await checkAuthState();
+        const { data: { user } } = await supabase.auth.getUser();
+        
+        if (user) {
+            // Extract username from email
+            const username = user.email.split('@')[0].toLowerCase();
+            
+            if (CONFIG.users[username]) {
+                currentUser = {
+                    username: username.charAt(0).toUpperCase() + username.slice(1),
+                    isAdmin: CONFIG.users[username].isAdmin
+                };
+                
+                showAppScreen();
+            } else {
+                await supabase.auth.signOut();
+                showAuthScreen();
+            }
+        }
     } catch (error) {
         console.error('Application initialization failed:', error);
         displayMessage(elements.loginError, 'Application failed to initialize. Please refresh the page.', true);
