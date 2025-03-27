@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Petrol Cost Tracker</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+    <div id="auth-container" class="auth-container container">
+        <h1>Petrol Cost Tracker</h1>
+        <div id="login-form">
+            <h2>Login</h2>
+            <div id="login-error" class="error-message hidden"></div>
+            <div class="input-group">
+                <label for="username">Username</label>
+                <input type="text" id="username" placeholder="Your username" required>
+            </div>
+            <div class="input-group">
+                <label for="password">Password</label>
+                <input type="password" id="password" placeholder="Your password" required>
+            </div>
+            <button id="login-btn" class="btn btn-login">Login</button>
+        </div>
+    </div>
+
+    <div id="app-container" class="container hidden">
+        <div class="user-info">
+            Logged in as: <span id="current-username"></span><span id="admin-badge"
+                class="admin-badge hidden">ADMIN</span>
+            <button id="logout-btn" class="logout-btn">Logout</button>
+        </div>
+        <h1>Petrol Cost Tracker</h1>
+
+        <form id="trip-form">
+            <div class="input-group">
+                <label for="distance">Distance (km)</label>
+                <input type="number" id="distance" placeholder="Enter kilometers" step="0.1" required>
+            </div>
+            <div class="input-group">
+                <label for="petrolPrice">Petrol Price (R/L)</label>
+                <input type="number" id="petrolPrice" placeholder="Price per liter" step="0.01" required>
+            </div>
+            <button type="submit" id="calculate-btn" class="btn btn-calculate">Calculate Cost</button>
+        </form>
+
+        <div id="result" class="result-container"></div>
+
+        <div class="history-section">
+            <h2>Trip History</h2>
+            <div id="loading" class="loading hidden">Loading...</div>
+            <div id="trips" class="trips-container"></div>
+            <div id="total" class="total-amount">Total Spent: R0</div>
+            <button id="clear-history-btn" class="btn btn-clear">Clear My History</button>
+            <button id="admin-clear-all-btn" class="btn btn-clear hidden">Clear All History (Admin)</button>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>
