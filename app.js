@@ -1,7 +1,7 @@
 // =============== CONFIGURATION ===============
 const CONFIG = {
     supabaseUrl: 'https://mtnjdjrlfamvpmnswumq.supabase.co',
-    supabaseKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhvdmxmc3FweHV2cGJ5d3RrcmhjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDMwNjkxNTAsImV4cCI6MjA1ODY0NTE1MH0.TyQwETGYoOlSOfCczvRKndnzWP7dlI0urgyFvF3fIG0',
+    supabaseKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im10bmpkanJsZmFtdnBtbnN3dW1xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDMwOTY4NDUsImV4cCI6MjA1ODY3Mjg0NX0.IRS_oL_Jvkk0WEbozefFiZL5DIsFsVEgvmiljvzX_Ok',
     fuelEfficiency: 11.47,
     users: {
         'Simon': { password: '@Ngrybirds71', isAdmin: true },
@@ -92,22 +92,30 @@ function updateNetworkStatus() {
 
 async function testSupabaseConnection() {
     try {
-        // First try DNS resolution
-        await new Promise((resolve, reject) => {
-            const img = new Image();
-            img.onload = resolve;
-            img.onerror = reject;
-            img.src = `${CONFIG.supabaseUrl}/favicon.ico?${Date.now()}`;
-        });
-
-        // Then test API endpoint
+        // Test with a simple REST endpoint
         const response = await fetch(`${CONFIG.supabaseUrl}/rest/v1/`, {
-            method: 'HEAD',
-            headers: { 'apikey': CONFIG.supabaseKey }
+            method: 'GET',
+            headers: { 
+                'apikey': CONFIG.supabaseKey,
+                'Content-Type': 'application/json'
+            }
         });
-        return response.ok;
+        
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        return true;
     } catch (error) {
         console.error('Connection test failed:', error);
+        
+        // More detailed error diagnostics
+        if (error.message.includes('Failed to fetch')) {
+            console.error('Network error - likely CORS or DNS issue');
+        } else if (error.message.includes('timed out')) {
+            console.error('Request timed out - server might be slow or unreachable');
+        }
+        
         return false;
     }
 }
@@ -116,11 +124,11 @@ async function testSupabaseConnection() {
 async function initializeSupabase() {
     try {
         if (!isOnline) throw new Error('Offline');
-        if (typeof supabase === 'undefined') throw new Error('Supabase library not loaded');
-
-        // First verify DNS resolution
-        const canResolve = await canResolveDns(CONFIG.supabaseUrl);
-        if (!canResolve) throw new Error('DNS resolution failed');
+        
+        // Load Supabase client if not already loaded
+        if (typeof supabase === 'undefined') {
+            await loadScript('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2');
+        }
 
         supabaseClient = supabase.createClient(
             CONFIG.supabaseUrl,
@@ -130,6 +138,9 @@ async function initializeSupabase() {
                     persistSession: true,
                     autoRefreshToken: true,
                     detectSessionInUrl: true
+                },
+                db: {
+                    schema: 'public'
                 },
                 global: {
                     headers: {
@@ -149,13 +160,14 @@ async function initializeSupabase() {
         console.error('Supabase init failed:', error);
         
         let errorMessage = 'Failed to connect to database. ';
-        if (error.message.includes('DNS resolution failed')) {
-            errorMessage += 'DNS resolution error. Please check:\n';
+        if (error.message.includes('Failed to fetch') || error.message.includes('timed out')) {
+            errorMessage += 'Network error detected. Please check:\n';
             errorMessage += '1. Your internet connection\n';
-            errorMessage += '2. The Supabase URL is correct\n';
-            errorMessage += '3. DNS settings on your network';
+            errorMessage += '2. VPN/Firewall settings (if any)\n';
+            errorMessage += '3. Try refreshing the page\n';
+            errorMessage += '4. The Supabase instance might be down';
         } else {
-            errorMessage += 'Please check your internet connection and refresh.';
+            errorMessage += error.message;
         }
         
         showError(elements.loginError, errorMessage);
@@ -163,30 +175,36 @@ async function initializeSupabase() {
     }
 }
 
-async function canResolveDns(url) {
-    try {
-        const domain = new URL(url).hostname;
-        await new Promise((resolve, reject) => {
-            const img = new Image();
-            img.onload = resolve;
-            img.onerror = reject;
-            img.src = `https://${domain}/favicon.ico?${Date.now()}`;
-        });
-        return true;
-    } catch {
-        return false;
-    }
+function loadScript(src) {
+    return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = src;
+        script.onload = resolve;
+        script.onerror = reject;
+        document.head.appendChild(script);
+    });
 }
 
 async function withTimeout(promise, ms) {
-    const timeout = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Timeout')), ms)
-    );
-    return Promise.race([promise, timeout]);
+    let timeout;
+    const timeoutPromise = new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new Error('Timeout')), ms);
+    });
+
+    try {
+        return await Promise.race([promise, timeoutPromise]);
+    } finally {
+        clearTimeout(timeout);
+    }
 }
 
 async function checkAuthState() {
     try {
+        if (!supabaseClient) {
+            showAuth();
+            return;
+        }
+
         const { data: { user }, error } = await supabaseClient.auth.getUser();
         if (error || !user) {
             showAuth();
@@ -313,18 +331,11 @@ async function handleTripSubmit(e) {
         showElement(elements.loadingElement, true);
         const totalCost = (distance / CONFIG.fuelEfficiency) * petrolPrice;
 
-        const { data: userData, error: userError } = await supabaseClient
-            .from('users')
-            .select('id')
-            .eq('username', currentUser.username)
-            .single();
-
-        if (userError || !userData) throw userError || new Error('User not found');
-
+        // For demo purposes, we'll skip the user lookup since we're using auth.users
         const { error } = await supabaseClient
             .from('trips')
             .insert([{
-                user_id: userData.id,
+                user_id: (await supabaseClient.auth.getUser()).data.user.id,
                 distance,
                 petrol_price: petrolPrice,
                 total_cost: parseFloat(totalCost.toFixed(2))
@@ -351,21 +362,13 @@ async function loadTrips() {
         showElement(elements.loadingElement, true);
         elements.tripsContainer.innerHTML = '';
 
-        const { data: userData, error: userError } = await supabaseClient
-            .from('users')
-            .select('id')
-            .eq('username', currentUser.username)
-            .single();
-
-        if (userError || !userData) throw userError || new Error('User not found');
-
         let query = supabaseClient
             .from('trips')
             .select('*')
             .order('created_at', { ascending: false });
 
         if (!currentUser.isAdmin) {
-            query = query.eq('user_id', userData.id);
+            query = query.eq('user_id', (await supabaseClient.auth.getUser()).data.user.id);
         }
 
         const { data: trips, error } = await query;
@@ -405,18 +408,10 @@ async function handleClearHistory() {
     try {
         showElement(elements.loadingElement, true);
         
-        const { data: userData, error: userError } = await supabaseClient
-            .from('users')
-            .select('id')
-            .eq('username', currentUser.username)
-            .single();
-
-        if (userError || !userData) throw userError || new Error('User not found');
-
         const { error } = await supabaseClient
             .from('trips')
             .delete()
-            .eq('user_id', userData.id);
+            .eq('user_id', (await supabaseClient.auth.getUser()).data.user.id);
 
         if (error) throw error;
 
