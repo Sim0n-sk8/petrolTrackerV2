@@ -1,12 +1,11 @@
 // ======================
-// CONFIGURATION
+// CONFIGURATION (UPDATE THESE VALUES)
 // ======================
 const CONFIG = {
-    // Replace with your actual Supabase URL
-    supabaseUrl: 'https://mtnjdjrlfamvpmnswumq.supabase.co',
-    // Replace with your actual anon/public key
-    supabaseKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im10bmpkanJsZmFtdnBtbnN3dW1xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDMwOTY4NDUsImV4cCI6MjA1ODY3Mjg0NX0.IRS_oL_Jvkk0WEbozefFiZL5DIsFsVEgvmiljvzX_Ok',
-    fuelEfficiency: 11.47, // km per liter
+    // Get these from your Supabase project settings
+    supabaseUrl: 'https://xovlfsqpxuvpbywtkrhc.supabase.co',
+    supabaseKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhvdmxmc3FweHV2cGJ5d3RrcmhjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDMwNjkxNTAsImV4cCI6MjA1ODY0NTE1MH0.TyQwETGYoOlSOfCczvRKndnzWP7dlI0urgyFvF3fIG0',
+    fuelEfficiency: 11.47,
     users: {
         'Simon': { password: '@Ngrybirds71', isAdmin: true },
         'Jaric': { password: 'pH0tos', isAdmin: false },
@@ -16,11 +15,10 @@ const CONFIG = {
     }
 };
 
-// ========================
+// ======================
 // DOM ELEMENTS
 // ======================
 const elements = {
-    // Auth elements
     authContainer: document.getElementById('auth-container'),
     appContainer: document.getElementById('app-container'),
     loginError: document.getElementById('login-error'),
@@ -28,22 +26,16 @@ const elements = {
     passwordInput: document.getElementById('password'),
     currentUsername: document.getElementById('current-username'),
     adminBadge: document.getElementById('admin-badge'),
-    
-    // Trip form elements
     distanceInput: document.getElementById('distance'),
     petrolPriceInput: document.getElementById('petrolPrice'),
     resultElement: document.getElementById('result'),
-    tripForm: document.getElementById('trip-form'),
-    
-    // History elements
     tripsContainer: document.getElementById('trips'),
     totalElement: document.getElementById('total'),
     loadingElement: document.getElementById('loading'),
+    tripForm: document.getElementById('trip-form'),
+    logoutBtn: document.getElementById('logout-btn'),
     clearHistoryBtn: document.getElementById('clear-history-btn'),
-    adminClearAllBtn: document.getElementById('admin-clear-all-btn'),
-    
-    // Other
-    logoutBtn: document.getElementById('logout-btn')
+    adminClearAllBtn: document.getElementById('admin-clear-all-btn')
 };
 
 // ======================
@@ -93,54 +85,52 @@ function showApp() {
 }
 
 // ======================
-// SUPABASE INITIALIZATION
+// SUPABASE INITIALIZATION (UPDATED)
 // ======================
 async function initializeSupabase() {
-    const MAX_RETRIES = 3;
-    let retryCount = 0;
-    
-    while (retryCount < MAX_RETRIES) {
-        try {
-            if (typeof supabase === 'undefined') {
-                throw new Error('Supabase library not loaded');
-            }
-            
-            supabaseClient = supabase.createClient(
-                CONFIG.supabaseUrl,
-                CONFIG.supabaseKey,
-                {
-                    auth: {
-                        persistSession: true,
-                        autoRefreshToken: true,
-                        detectSessionInUrl: true
-                    },
-                    global: {
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Apikey': CONFIG.supabaseKey
-                        }
+    try {
+        // Verify Supabase library is loaded
+        if (typeof supabase === 'undefined') {
+            throw new Error('Supabase library not loaded. Check your script tags.');
+        }
+
+        // Initialize with proper configuration
+        supabaseClient = supabase.createClient(
+            CONFIG.supabaseUrl,
+            CONFIG.supabaseKey,
+            {
+                auth: {
+                    persistSession: true,
+                    autoRefreshToken: true,
+                    detectSessionInUrl: true
+                },
+                global: {
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'apikey': CONFIG.supabaseKey
                     }
                 }
-            );
-            
-            // Test connection
-            const { error } = await supabaseClient.auth.getSession();
-            if (error) throw error;
-            
-            return true;
-        } catch (error) {
-            console.error(`Supabase init attempt ${retryCount + 1} failed:`, error);
-            retryCount++;
-            if (retryCount >= MAX_RETRIES) {
-                throw new Error('Failed to connect to Supabase after multiple attempts');
             }
-            await new Promise(resolve => setTimeout(resolve, 2000 * (retryCount + 1)));
+        );
+
+        // Test the connection
+        const { data, error } = await supabaseClient.auth.getSession();
+        if (error) {
+            throw new Error('Failed to connect to Supabase: ' + error.message);
         }
+
+        return true;
+    } catch (error) {
+        console.error('Supabase initialization failed:', error);
+        showError(elements.loginError, 
+            'Failed to connect to database. ' +
+            'Please check your internet connection and refresh the page.');
+        return false;
     }
 }
 
 // ======================
-// AUTHENTICATION FUNCTIONS
+// AUTHENTICATION FUNCTIONS (UPDATED)
 // ======================
 async function checkAuthState() {
     try {
@@ -186,19 +176,16 @@ async function handleLogin(e) {
         showElement(elements.loadingElement, true);
         hideError(elements.loginError);
 
-        const loginPromise = supabaseClient.auth.signInWithPassword({
+        const { error } = await supabaseClient.auth.signInWithPassword({
             email: `${username}@petroltracker.com`,
             password: password
         });
 
-        const timeoutPromise = new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Login timeout')), 15000)
-        );
-
-        const { error } = await Promise.race([loginPromise, timeoutPromise]);
-
         if (error) {
-            if (error.message.includes('Failed to fetch')) {
+            // Handle specific error cases
+            if (error.message.includes('Invalid API key')) {
+                throw new Error('Server configuration error. Please contact support.');
+            } else if (error.message.includes('Failed to fetch')) {
                 throw new Error('Network error - could not reach server');
             }
             throw error;
@@ -213,15 +200,12 @@ async function handleLogin(e) {
         console.error('Login failed:', error);
         
         let errorMessage = 'Login failed. ';
-        if (error.message.includes('Network error') || error.message.includes('Failed to fetch')) {
-            errorMessage += 'Network issues detected. Please check:';
-            errorMessage += '\n1. Your internet connection';
-            errorMessage += '\n2. If you\'re behind a firewall/proxy';
-            errorMessage += '\n3. The Supabase project URL is correct';
+        if (error.message.includes('Invalid API key')) {
+            errorMessage = 'Server configuration error. Please try again later.';
+        } else if (error.message.includes('Network error')) {
+            errorMessage += 'Network issues detected. Please check your connection.';
         } else if (error.message.includes('Invalid')) {
             errorMessage = 'Invalid username or password';
-        } else if (error.message.includes('timeout')) {
-            errorMessage = 'Server is not responding. Please try again later.';
         }
         
         showError(elements.loginError, errorMessage);
@@ -405,20 +389,6 @@ async function handleAdminClearAll() {
 }
 
 // ======================
-// EVENT LISTENERS
-// ======================
-function setupEventListeners() {
-    // Auth listeners
-    document.getElementById('login-btn').addEventListener('click', handleLogin);
-    elements.logoutBtn.addEventListener('click', handleLogout);
-    
-    // Trip listeners
-    elements.tripForm.addEventListener('submit', handleTripSubmit);
-    elements.clearHistoryBtn.addEventListener('click', handleClearHistory);
-    elements.adminClearAllBtn.addEventListener('click', handleAdminClearAll);
-}
-
-// ======================
 // INITIALIZATION
 // ======================
 async function initializeApp() {
@@ -426,24 +396,29 @@ async function initializeApp() {
         // Check if running on file protocol
         if (window.location.protocol === 'file:') {
             showError(elements.loginError, 
-                'This app must be run on a web server (not file://).\n' +
+                'This app must be run on a web server (not file://). ' +
                 'Use VS Code Live Server or similar.');
             return;
         }
 
         // Initialize Supabase
-        await initializeSupabase();
+        const supabaseInitialized = await initializeSupabase();
+        if (!supabaseInitialized) return;
         
         // Setup event listeners
-        setupEventListeners();
+        document.getElementById('login-btn').addEventListener('click', handleLogin);
+        elements.logoutBtn.addEventListener('click', handleLogout);
+        elements.tripForm.addEventListener('submit', handleTripSubmit);
+        elements.clearHistoryBtn.addEventListener('click', handleClearHistory);
+        elements.adminClearAllBtn.addEventListener('click', handleAdminClearAll);
         
         // Check auth state
         await checkAuthState();
     } catch (error) {
         console.error('App initialization failed:', error);
         showError(elements.loginError, 
-            'Failed to initialize application.\n' +
-            'Please check your network connection and refresh the page.');
+            'Application startup failed. ' +
+            'Please check console for details and refresh the page.');
     }
 }
 
