@@ -14,8 +14,14 @@ const CONFIG = {
 
 // =============== INITIALIZATION ===============
 document.addEventListener('DOMContentLoaded', async () => {
+    // Ensure Supabase is available
+    if (!window.supabase) {
+        console.error("Supabase is not loaded. Ensure you have included the Supabase script.");
+        return;
+    }
+
     // Load Supabase client
-    const { createClient } = supabase;
+    const { createClient } = window.supabase;
     const supabaseClient = createClient(CONFIG.supabaseUrl, CONFIG.supabaseKey);
 
     // =============== DOM ELEMENTS ===============
@@ -97,10 +103,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             
         } catch (error) {
             console.error('Login error:', error);
-            const message = error.message.includes('Invalid login credentials') 
-                ? 'Invalid password. Please try again.' 
-                : 'Login failed: ' + error.message;
-            displayMessage(elements.loginError, message, true);
+            displayMessage(elements.loginError, 'Login failed: ' + error.message, true);
         } finally {
             showElement(elements.loadingIndicator, false);
         }
@@ -114,188 +117,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         } catch (error) {
             console.error('Logout failed:', error);
             displayMessage(elements.resultDisplay, 'Logout failed. Please try again.', true);
-        }
-    }
-
-    // =============== TRIP MANAGEMENT FUNCTIONS ===============
-    async function handleTripSubmit(e) {
-        e.preventDefault();
-        
-        const distance = parseFloat(elements.distanceInput.value);
-        const petrolPrice = parseFloat(elements.petrolPriceInput.value);
-
-        if (isNaN(distance) || distance <= 0) {
-            displayMessage(elements.resultDisplay, 'Please enter a valid distance', true);
-            return;
-        }
-
-        if (isNaN(petrolPrice) || petrolPrice <= 0) {
-            displayMessage(elements.resultDisplay, 'Please enter a valid petrol price', true);
-            return;
-        }
-
-        try {
-            showElement(elements.loadingIndicator, true);
-            const totalCost = (distance / CONFIG.fuelEfficiency) * petrolPrice;
-
-            const { data: { user }, error: userError } = await supabaseClient.auth.getUser();
-            if (userError) throw userError;
-
-            // Get or create user in mapping table
-            let { data: localUser, error: lookupError } = await supabaseClient
-                .from('users')
-                .select('id')
-                .eq('supabase_uid', user.id)
-                .single();
-
-            if (lookupError || !localUser) {
-                const { data: newUser, error: createError } = await supabaseClient
-                    .from('users')
-                    .insert([{
-                        supabase_uid: user.id,
-                        username: user.email.split('@')[0],
-                        is_admin: CONFIG.users[user.email.split('@')[0]]?.isAdmin || false
-                    }])
-                    .select()
-                    .single();
-
-                if (createError) throw createError;
-                localUser = newUser;
-            }
-
-            const { error } = await supabaseClient
-                .from('trips')
-                .insert([{
-                    user_id: localUser.id,
-                    distance,
-                    petrol_price: petrolPrice,
-                    total_cost: parseFloat(totalCost.toFixed(2))
-                }]);
-
-            if (error) throw error;
-
-            displayMessage(elements.resultDisplay, `Trip recorded: R${totalCost.toFixed(2)}`);
-            elements.distanceInput.value = '';
-            elements.petrolPriceInput.value = '';
-            await loadTrips();
-        } catch (error) {
-            console.error('Error saving trip:', error);
-            displayMessage(elements.resultDisplay, 'Error saving trip: ' + error.message, true);
-        } finally {
-            showElement(elements.loadingIndicator, false);
-        }
-    }
-
-    async function loadTrips() {
-        if (!currentUser) return;
-
-        try {
-            showElement(elements.loadingIndicator, true);
-            elements.tripsContainer.innerHTML = '';
-
-            const { data: { user }, error: userError } = await supabaseClient.auth.getUser();
-            if (userError) throw userError;
-
-            let query = supabaseClient
-                .from('trips')
-                .select('*')
-                .order('created_at', { ascending: false });
-
-            if (!currentUser.isAdmin) {
-                query = query.eq('user_id', 
-                    supabaseClient.from('users')
-                    .select('id')
-                    .eq('supabase_uid', user.id)
-                );
-            }
-
-            const { data: trips, error } = await query;
-            if (error) throw error;
-
-            if (!trips || trips.length === 0) {
-                elements.tripsContainer.innerHTML = '<div class="empty-state">No trips recorded yet</div>';
-                elements.totalSpentDisplay.textContent = 'R0.00';
-                return;
-            }
-
-            trips.forEach(trip => {
-                const tripElement = document.createElement('div');
-                tripElement.className = 'trip-item';
-                tripElement.innerHTML = `
-                    <div class="trip-date">${new Date(trip.created_at).toLocaleDateString()}</div>
-                    <div class="trip-details">
-                        <span>${trip.distance} km</span>
-                        <span>@ R${trip.petrol_price.toFixed(2)}/L</span>
-                    </div>
-                    <div class="trip-cost">R${trip.total_cost.toFixed(2)}</div>
-                `;
-                elements.tripsContainer.appendChild(tripElement);
-            });
-
-            const totalSpent = trips.reduce((sum, trip) => sum + trip.total_cost, 0);
-            elements.totalSpentDisplay.textContent = `R${totalSpent.toFixed(2)}`;
-        } catch (error) {
-            console.error('Error loading trips:', error);
-            elements.tripsContainer.innerHTML = '<div class="error-state">Error loading trips</div>';
-        } finally {
-            showElement(elements.loadingIndicator, false);
-        }
-    }
-
-    async function handleClearHistory() {
-        if (!currentUser || !confirm('Are you sure you want to clear your trip history?')) return;
-
-        try {
-            showElement(elements.loadingIndicator, true);
-            
-            const { data: { user }, error: userError } = await supabaseClient.auth.getUser();
-            if (userError) throw userError;
-
-            const { data: localUser, error: lookupError } = await supabaseClient
-                .from('users')
-                .select('id')
-                .eq('supabase_uid', user.id)
-                .single();
-
-            if (lookupError || !localUser) throw lookupError || new Error('User not found');
-
-            const { error } = await supabaseClient
-                .from('trips')
-                .delete()
-                .eq('user_id', localUser.id);
-
-            if (error) throw error;
-
-            displayMessage(elements.resultDisplay, 'Your trip history has been cleared');
-            await loadTrips();
-        } catch (error) {
-            console.error('Error clearing history:', error);
-            displayMessage(elements.resultDisplay, 'Error clearing history', true);
-        } finally {
-            showElement(elements.loadingIndicator, false);
-        }
-    }
-
-    async function handleAdminClearAll() {
-        if (!currentUser?.isAdmin || !confirm('Are you sure you want to clear ALL trip history?')) return;
-
-        try {
-            showElement(elements.loadingIndicator, true);
-            
-            const { error } = await supabaseClient
-                .from('trips')
-                .delete()
-                .neq('id', 0);
-
-            if (error) throw error;
-
-            displayMessage(elements.resultDisplay, 'All trip history has been cleared');
-            await loadTrips();
-        } catch (error) {
-            console.error('Error clearing all history:', error);
-            displayMessage(elements.resultDisplay, 'Error clearing all history', true);
-        } finally {
-            showElement(elements.loadingIndicator, false);
         }
     }
 
@@ -314,16 +135,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         elements.currentUserDisplay.textContent = currentUser.username;
         showElement(elements.adminBadge, currentUser.isAdmin);
         showElement(elements.adminClearAllButton, currentUser.isAdmin);
-        loadTrips();
     }
 
     // =============== EVENT LISTENERS ===============
     function setupEventListeners() {
         elements.loginForm.addEventListener('submit', handleLogin);
         elements.logoutButton.addEventListener('click', handleLogout);
-        elements.tripForm.addEventListener('submit', handleTripSubmit);
-        elements.clearHistoryButton.addEventListener('click', handleClearHistory);
-        elements.adminClearAllButton.addEventListener('click', handleAdminClearAll);
     }
 
     // =============== APPLICATION STATE ===============
