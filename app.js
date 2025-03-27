@@ -1,8 +1,5 @@
-// ======================
-// CONFIGURATION (UPDATE THESE VALUES)
-// ======================
+// =============== CONFIGURATION ===============
 const CONFIG = {
-    // Get these from your Supabase project settings
     supabaseUrl: 'https://xovlfsqpxuvpbywtkrhc.supabase.co',
     supabaseKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhvdmxmc3FweHV2cGJ5d3RrcmhjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDMwNjkxNTAsImV4cCI6MjA1ODY0NTE1MH0.TyQwETGYoOlSOfCczvRKndnzWP7dlI0urgyFvF3fIG0',
     fuelEfficiency: 11.47,
@@ -15,9 +12,7 @@ const CONFIG = {
     }
 };
 
-// ======================
-// DOM ELEMENTS
-// ======================
+// =============== DOM ELEMENTS ===============
 const elements = {
     authContainer: document.getElementById('auth-container'),
     appContainer: document.getElementById('app-container'),
@@ -35,18 +30,16 @@ const elements = {
     tripForm: document.getElementById('trip-form'),
     logoutBtn: document.getElementById('logout-btn'),
     clearHistoryBtn: document.getElementById('clear-history-btn'),
-    adminClearAllBtn: document.getElementById('admin-clear-all-btn')
+    adminClearAllBtn: document.getElementById('admin-clear-all-btn'),
+    networkStatus: document.createElement('div')
 };
 
-// ======================
-// APPLICATION STATE
-// ======================
+// =============== APP STATE ===============
 let currentUser = null;
 let supabaseClient = null;
+let isOnline = navigator.onLine;
 
-// ======================
-// UTILITY FUNCTIONS
-// ======================
+// =============== UTILITY FUNCTIONS ===============
 function showElement(element, show = true) {
     element.classList.toggle('hidden', !show);
 }
@@ -67,34 +60,55 @@ function showResult(message, color = '#4a6cf7') {
     setTimeout(() => elements.resultElement.textContent = '', 5000);
 }
 
-function showAuth() {
-    elements.authContainer.classList.remove('hidden');
-    elements.appContainer.classList.add('hidden');
-    elements.usernameInput.value = '';
-    elements.passwordInput.value = '';
-    hideError(elements.loginError);
+// =============== NETWORK HANDLING ===============
+function setupNetworkMonitoring() {
+    elements.networkStatus.style.position = 'fixed';
+    elements.networkStatus.style.bottom = '10px';
+    elements.networkStatus.style.right = '10px';
+    elements.networkStatus.style.padding = '8px 12px';
+    elements.networkStatus.style.borderRadius = '4px';
+    elements.networkStatus.style.zIndex = '1000';
+    document.body.appendChild(elements.networkStatus);
+    updateNetworkStatus();
+
+    window.addEventListener('online', () => {
+        isOnline = true;
+        updateNetworkStatus();
+        hideError(elements.loginError);
+    });
+
+    window.addEventListener('offline', () => {
+        isOnline = false;
+        updateNetworkStatus();
+        showError(elements.loginError, 'You are offline. Please check your connection.');
+    });
 }
 
-function showApp() {
-    elements.authContainer.classList.add('hidden');
-    elements.appContainer.classList.remove('hidden');
-    elements.currentUsername.textContent = currentUser.username;
-    showElement(elements.adminBadge, currentUser.isAdmin);
-    showElement(elements.adminClearAllBtn, currentUser.isAdmin);
-    loadTrips();
+function updateNetworkStatus() {
+    elements.networkStatus.textContent = isOnline ? '🟢 Online' : '🔴 Offline';
+    elements.networkStatus.style.backgroundColor = isOnline ? '#4CAF50' : '#f44336';
+    elements.networkStatus.style.color = 'white';
 }
 
-// ======================
-// SUPABASE INITIALIZATION (UPDATED)
-// ======================
+async function testSupabaseConnection() {
+    try {
+        const response = await fetch(`${CONFIG.supabaseUrl}/rest/v1/`, {
+            method: 'HEAD',
+            headers: { 'apikey': CONFIG.supabaseKey }
+        });
+        return response.ok;
+    } catch (error) {
+        console.error('Connection test failed:', error);
+        return false;
+    }
+}
+
+// =============== AUTH FUNCTIONS ===============
 async function initializeSupabase() {
     try {
-        // Verify Supabase library is loaded
-        if (typeof supabase === 'undefined') {
-            throw new Error('Supabase library not loaded. Check your script tags.');
-        }
+        if (!isOnline) throw new Error('Offline');
+        if (typeof supabase === 'undefined') throw new Error('Supabase not loaded');
 
-        // Initialize with proper configuration
         supabaseClient = supabase.createClient(
             CONFIG.supabaseUrl,
             CONFIG.supabaseKey,
@@ -113,25 +127,20 @@ async function initializeSupabase() {
             }
         );
 
-        // Test the connection
-        const { data, error } = await supabaseClient.auth.getSession();
-        if (error) {
-            throw new Error('Failed to connect to Supabase: ' + error.message);
-        }
+        // Test connection
+        const isConnected = await testSupabaseConnection();
+        if (!isConnected) throw new Error('Cannot reach Supabase');
 
         return true;
     } catch (error) {
-        console.error('Supabase initialization failed:', error);
+        console.error('Supabase init failed:', error);
         showError(elements.loginError, 
             'Failed to connect to database. ' +
-            'Please check your internet connection and refresh the page.');
+            'Please check your internet connection and refresh.');
         return false;
     }
 }
 
-// ======================
-// AUTHENTICATION FUNCTIONS (UPDATED)
-// ======================
 async function checkAuthState() {
     try {
         const { data: { user }, error } = await supabaseClient.auth.getUser();
@@ -152,13 +161,18 @@ async function checkAuthState() {
             showAuth();
         }
     } catch (error) {
-        console.error('Auth state check failed:', error);
+        console.error('Auth check failed:', error);
         showAuth();
     }
 }
 
 async function handleLogin(e) {
     e.preventDefault();
+    if (!isOnline) {
+        showError(elements.loginError, 'You are offline. Please connect to the internet.');
+        return;
+    }
+
     const username = elements.usernameInput.value.trim();
     const password = elements.passwordInput.value;
 
@@ -176,20 +190,17 @@ async function handleLogin(e) {
         showElement(elements.loadingElement, true);
         hideError(elements.loginError);
 
-        const { error } = await supabaseClient.auth.signInWithPassword({
-            email: `${username}@petroltracker.com`,
-            password: password
-        });
+        // Add retry logic
+        const { error } = await withRetry(
+            () => supabaseClient.auth.signInWithPassword({
+                email: `${username}@petroltracker.com`,
+                password: password
+            }),
+            3,  // 3 retries
+            1000 // 1 second delay
+        );
 
-        if (error) {
-            // Handle specific error cases
-            if (error.message.includes('Invalid API key')) {
-                throw new Error('Server configuration error. Please contact support.');
-            } else if (error.message.includes('Failed to fetch')) {
-                throw new Error('Network error - could not reach server');
-            }
-            throw error;
-        }
+        if (error) throw error;
 
         currentUser = {
             username,
@@ -200,10 +211,12 @@ async function handleLogin(e) {
         console.error('Login failed:', error);
         
         let errorMessage = 'Login failed. ';
-        if (error.message.includes('Invalid API key')) {
-            errorMessage = 'Server configuration error. Please try again later.';
-        } else if (error.message.includes('Network error')) {
-            errorMessage += 'Network issues detected. Please check your connection.';
+        if (error.message.includes('Failed to fetch') || 
+            error.message.includes('ERR_NAME_NOT_RESOLVED')) {
+            errorMessage += 'Network error. Please check:\n';
+            errorMessage += '1. Your internet connection\n';
+            errorMessage += '2. VPN/Firewall settings\n';
+            errorMessage += '3. Supabase project status';
         } else if (error.message.includes('Invalid')) {
             errorMessage = 'Invalid username or password';
         }
@@ -211,6 +224,16 @@ async function handleLogin(e) {
         showError(elements.loginError, errorMessage);
     } finally {
         showElement(elements.loadingElement, false);
+    }
+}
+
+async function withRetry(fn, retries, delay) {
+    try {
+        return await fn();
+    } catch (error) {
+        if (retries <= 0) throw error;
+        await new Promise(resolve => setTimeout(resolve, delay));
+        return withRetry(fn, retries - 1, delay);
     }
 }
 
@@ -225,9 +248,7 @@ async function handleLogout() {
     }
 }
 
-// ======================
-// TRIP FUNCTIONS
-// ======================
+// =============== TRIP FUNCTIONS ===============
 async function handleTripSubmit(e) {
     e.preventDefault();
     
@@ -388,18 +409,36 @@ async function handleAdminClearAll() {
     }
 }
 
-// ======================
-// INITIALIZATION
-// ======================
+function showAuth() {
+    elements.authContainer.classList.remove('hidden');
+    elements.appContainer.classList.add('hidden');
+    elements.usernameInput.value = '';
+    elements.passwordInput.value = '';
+    hideError(elements.loginError);
+}
+
+function showApp() {
+    elements.authContainer.classList.add('hidden');
+    elements.appContainer.classList.remove('hidden');
+    elements.currentUsername.textContent = currentUser.username;
+    showElement(elements.adminBadge, currentUser.isAdmin);
+    showElement(elements.adminClearAllBtn, currentUser.isAdmin);
+    loadTrips();
+}
+
+// =============== INITIALIZATION ===============
 async function initializeApp() {
     try {
         // Check if running on file protocol
         if (window.location.protocol === 'file:') {
             showError(elements.loginError, 
                 'This app must be run on a web server (not file://). ' +
-                'Use VS Code Live Server or similar.');
+                'Use VS Code Live Server extension.');
             return;
         }
+
+        // Setup network monitoring
+        setupNetworkMonitoring();
 
         // Initialize Supabase
         const supabaseInitialized = await initializeSupabase();
@@ -418,7 +457,7 @@ async function initializeApp() {
         console.error('App initialization failed:', error);
         showError(elements.loginError, 
             'Application startup failed. ' +
-            'Please check console for details and refresh the page.');
+            'Please check console and refresh the page.');
     }
 }
 
