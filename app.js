@@ -3,9 +3,9 @@
 // ======================
 const CONFIG = {
     // Replace with your actual Supabase URL
-    supabaseUrl: 'https://your-project-ref.supabase.co',
+    supabaseUrl: 'https://mtnjdjrlfamvpmnswumq.supabase.co',
     // Replace with your actual anon/public key
-    supabaseKey: 'your-anon-key-here',
+    supabaseKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im10bmpkanJsZmFtdnBtbnN3dW1xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDMwOTY4NDUsImV4cCI6MjA1ODY3Mjg0NX0.IRS_oL_Jvkk0WEbozefFiZL5DIsFsVEgvmiljvzX_Ok',
     fuelEfficiency: 11.47, // km per liter
     users: {
         'Simon': { password: '@Ngrybirds71', isAdmin: true },
