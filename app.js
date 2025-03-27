@@ -27,6 +27,7 @@ const elements = {
     tripsContainer: document.getElementById('trips'),
     totalElement: document.getElementById('total'),
     loadingElement: document.getElementById('loading'),
+    connectionStatus: document.createElement('div'),
     tripForm: document.getElementById('trip-form'),
     logoutBtn: document.getElementById('logout-btn'),
     clearHistoryBtn: document.getElementById('clear-history-btn'),
@@ -36,6 +37,46 @@ const elements = {
 // App State
 let currentUser = null;
 let supabaseClient = null;
+let isOnline = navigator.onLine;
+
+// Initialize Connection Status Indicator
+function initConnectionStatus() {
+    elements.connectionStatus.style.position = 'fixed';
+    elements.connectionStatus.style.bottom = '10px';
+    elements.connectionStatus.style.right = '10px';
+    elements.connectionStatus.style.padding = '8px 12px';
+    elements.connectionStatus.style.borderRadius = '4px';
+    elements.connectionStatus.style.fontSize = '14px';
+    updateConnectionStatus();
+    document.body.appendChild(elements.connectionStatus);
+}
+
+function updateConnectionStatus() {
+    if (isOnline) {
+        elements.connectionStatus.textContent = 'Online';
+        elements.connectionStatus.style.backgroundColor = '#4CAF50';
+        elements.connectionStatus.style.color = 'white';
+    } else {
+        elements.connectionStatus.textContent = 'Offline';
+        elements.connectionStatus.style.backgroundColor = '#f44336';
+        elements.connectionStatus.style.color = 'white';
+    }
+}
+
+// Network Event Listeners
+window.addEventListener('online', () => {
+    isOnline = true;
+    updateConnectionStatus();
+    hideError(elements.loginError);
+    console.log('Connection restored');
+});
+
+window.addEventListener('offline', () => {
+    isOnline = false;
+    updateConnectionStatus();
+    showError(elements.loginError, 'You are offline. Please check your connection.');
+    console.log('Connection lost');
+});
 
 // Utility Functions
 function showElement(element, show = true) {
@@ -57,20 +98,20 @@ function showResult(message, color = '#4a6cf7') {
     setTimeout(() => elements.resultElement.textContent = '', 5000);
 }
 
-// Supabase Initialization
+// Supabase Initialization with Enhanced Retry Logic
 async function initializeSupabase() {
-    const MAX_RETRIES = 3;
+    const MAX_RETRIES = 5;
     let retryCount = 0;
     
     while (retryCount < MAX_RETRIES) {
         try {
             if (!window.supabase) {
-                await new Promise(resolve => setTimeout(resolve, 1000 * (retryCount + 1)));
+                await new Promise(resolve => setTimeout(resolve, 1500 * (retryCount + 1)));
                 retryCount++;
                 continue;
             }
             
-            supabaseClient = window.supabase.createClient(
+            const initPromise = window.supabase.createClient(
                 CONFIG.supabaseUrl,
                 CONFIG.supabaseKey,
                 {
@@ -78,19 +119,37 @@ async function initializeSupabase() {
                         autoRefreshToken: true,
                         persistSession: true,
                         detectSessionInUrl: true
+                    },
+                    global: {
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Apikey': CONFIG.supabaseKey
+                        }
                     }
                 }
             );
             
-            // Test connection
-            await supabaseClient.auth.getSession();
+            const timeoutPromise = new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Connection timeout')), 10000)
+            );
+            
+            supabaseClient = await Promise.race([initPromise, timeoutPromise]);
+            
+            // Test connection with timeout
+            const testPromise = supabaseClient.auth.getSession();
+            const testTimeout = new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Connection test timeout')), 8000)
+            );
+            
+            await Promise.race([testPromise, testTimeout]);
             return true;
         } catch (error) {
             console.error(`Supabase init attempt ${retryCount + 1} failed:`, error);
             retryCount++;
             if (retryCount >= MAX_RETRIES) {
-                throw new Error('Failed to connect to server after multiple attempts');
+                throw new Error('Failed to connect to the server after multiple attempts. Please check your internet connection or try again later.');
             }
+            await new Promise(resolve => setTimeout(resolve, 2000 * Math.pow(2, retryCount)));
         }
     }
 }
@@ -140,12 +199,26 @@ async function handleLogin(e) {
         showElement(elements.loadingElement, true);
         hideError(elements.loginError);
 
-        const { error } = await supabaseClient.auth.signInWithPassword({
+        const loginPromise = supabaseClient.auth.signInWithPassword({
             email: `${username}@petroltracker.com`,
             password: password
         });
 
-        if (error) throw error;
+        const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Login timeout. Server is not responding.')), 15000)
+        );
+
+        const { error } = await Promise.race([loginPromise, timeoutPromise]);
+
+        if (error) {
+            if (error.status === 0) {
+                throw new Error('Network error. Could not reach the server.');
+            } else if (error.message.includes('Invalid')) {
+                throw new Error('Invalid credentials');
+            } else {
+                throw error;
+            }
+        }
 
         currentUser = { 
             username, 
@@ -154,10 +227,19 @@ async function handleLogin(e) {
         showApp();
     } catch (error) {
         console.error('Login failed:', error);
+        
         let errorMessage = 'Login failed. Please try again.';
-        if (error.message.includes('Failed to fetch')) {
-            errorMessage = 'Network error. Please check your connection.';
+        if (error.message.includes('Network error') || 
+            error.message.includes('Failed to fetch') ||
+            error.message.includes('timeout')) {
+            errorMessage = 'Network issue detected. Please check:';
+            errorMessage += '\n1. Your internet connection';
+            errorMessage += '\n2. If you\'re behind a firewall/proxy';
+            errorMessage += '\n3. Try refreshing the page';
+        } else if (error.message.includes('Invalid credentials')) {
+            errorMessage = 'Invalid username or password';
         }
+        
         showError(elements.loginError, errorMessage);
     } finally {
         showElement(elements.loadingElement, false);
@@ -196,7 +278,6 @@ async function handleTripSubmit(e) {
         showElement(elements.loadingElement, true);
         const totalCost = (distance / CONFIG.fuelEfficiency) * petrolPrice;
 
-        // Get user ID from database
         const { data: userData, error: userError } = await supabaseClient
             .from('users')
             .select('id')
@@ -205,7 +286,6 @@ async function handleTripSubmit(e) {
 
         if (userError || !userData) throw userError || new Error('User not found');
 
-        // Save trip to database
         const { error } = await supabaseClient
             .from('trips')
             .insert([{
@@ -236,7 +316,6 @@ async function loadTrips() {
         showElement(elements.loadingElement, true);
         elements.tripsContainer.innerHTML = '';
 
-        // Get user ID from database
         const { data: userData, error: userError } = await supabaseClient
             .from('users')
             .select('id')
@@ -245,7 +324,6 @@ async function loadTrips() {
 
         if (userError || !userData) throw userError || new Error('User not found');
 
-        // Build query based on user role
         let query = supabaseClient
             .from('trips')
             .select('*')
@@ -259,7 +337,6 @@ async function loadTrips() {
 
         if (error) throw error;
 
-        // Display trips
         if (!trips || trips.length === 0) {
             elements.tripsContainer.innerHTML = '<div class="history-item">No trips recorded yet</div>';
             elements.totalElement.textContent = 'Total Spent: R0';
@@ -277,7 +354,6 @@ async function loadTrips() {
             elements.tripsContainer.appendChild(tripElement);
         });
 
-        // Calculate and display total
         const totalSpend = trips.reduce((sum, trip) => sum + trip.total_cost, 0);
         elements.totalElement.textContent = `Total Spent: R${totalSpend.toFixed(2)}`;
     } catch (error) {
@@ -294,7 +370,6 @@ async function handleClearHistory() {
     try {
         showElement(elements.loadingElement, true);
         
-        // Get user ID from database
         const { data: userData, error: userError } = await supabaseClient
             .from('users')
             .select('id')
@@ -303,7 +378,6 @@ async function handleClearHistory() {
 
         if (userError || !userData) throw userError || new Error('User not found');
 
-        // Delete user's trips
         const { error } = await supabaseClient
             .from('trips')
             .delete()
@@ -327,7 +401,6 @@ async function handleAdminClearAll() {
     try {
         showElement(elements.loadingElement, true);
         
-        // Delete all trips
         const { error } = await supabaseClient
             .from('trips')
             .delete()
@@ -366,9 +439,29 @@ function showApp() {
 // Initialize Application
 async function initializeApp() {
     try {
+        // Initialize connection status indicator
+        initConnectionStatus();
+        
+        // Check online status
+        if (!isOnline) {
+            showError(elements.loginError, 'You are currently offline. Please connect to the internet.');
+            return;
+        }
+
         // Check if running on file protocol
         if (window.location.protocol === 'file:') {
-            showError(elements.loginError, 'This app must be run on a web server (not file://)');
+            showError(elements.loginError, 'This app must be run on a web server (not file://). Try using Live Server in VS Code.');
+            return;
+        }
+
+        // Check CORS availability
+        try {
+            const testResponse = await fetch(CONFIG.supabaseUrl, { method: 'HEAD' });
+            if (!testResponse.ok) {
+                throw new Error('Server not responding properly');
+            }
+        } catch (e) {
+            showError(elements.loginError, 'Cannot connect to server. Possible network restrictions. Try: 1. Different browser 2. Different network 3. Disabling VPN');
             return;
         }
 
@@ -386,7 +479,16 @@ async function initializeApp() {
         await checkAuthState();
     } catch (error) {
         console.error('App initialization failed:', error);
-        showError(elements.loginError, 'Failed to connect to server. Please check your internet connection and refresh the page.');
+        let errorMessage = 'Application error. Please refresh the page.';
+        if (error.message.includes('CORS')) {
+            errorMessage = 'Cross-origin error. Try:';
+            errorMessage += '\n1. Using Chrome/Firefox';
+            errorMessage += '\n2. Disabling browser extensions';
+            errorMessage += '\n3. Checking your network settings';
+        } else if (error.message.includes('timeout')) {
+            errorMessage = 'Server is not responding. Try again later.';
+        }
+        showError(elements.loginError, errorMessage);
     }
 }
 
