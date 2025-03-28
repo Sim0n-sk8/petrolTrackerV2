@@ -41,7 +41,7 @@ class PetrolCostTracker {
 
     async initialize() {
         try {
-            // Initialize Supabase client with enhanced session handling
+            // Initialize Supabase client with enhanced configuration
             this.supabaseClient = supabase.createClient(
                 CONFIG.SUPABASE_URL, 
                 CONFIG.SUPABASE_ANON_KEY,
@@ -50,7 +50,8 @@ class PetrolCostTracker {
                         persistSession: true,
                         autoRefreshToken: true,
                         detectSessionInUrl: true,
-                        storage: localStorage
+                        storage: localStorage,
+                        flowType: 'pkce'
                     }
                 }
             );
@@ -58,12 +59,25 @@ class PetrolCostTracker {
             // Set up event listeners
             this.setupEventListeners();
 
-            // Check initial auth state
-            await this.checkAuthState();
+            // Check initial auth state with retry logic
+            await this.checkAuthStateWithRetry();
 
         } catch (error) {
-            console.error('Initialization failed:', error);
+            this.logError('Initialization failed', error);
             this.showErrorScreen('Application failed to initialize. Please refresh the page.');
+        }
+    }
+
+    async checkAuthStateWithRetry(retries = 3) {
+        for (let i = 0; i < retries; i++) {
+            try {
+                await this.checkAuthState();
+                return;
+            } catch (error) {
+                this.logError(`Auth check failed (attempt ${i + 1})`, error);
+                if (i === retries - 1) throw error;
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
         }
     }
 
@@ -100,8 +114,18 @@ class PetrolCostTracker {
         }
     }
 
+    logError(context, error) {
+        console.error(`${context}:`, {
+            name: error.name,
+            message: error.message,
+            stack: error.stack,
+            code: error.code,
+            details: error.details,
+            fullError: JSON.stringify(error, Object.getOwnPropertyNames(error))
+        });
+    }
+
     showErrorScreen(message) {
-        // Fallback error display
         document.body.innerHTML = `
             <div class="error-container">
                 <h2>Application Error</h2>
@@ -142,9 +166,10 @@ class PetrolCostTracker {
                 password: password
             });
 
-            if (error) throw error;
+            if (error) {
+                throw error;
+            }
 
-            // Ensure session is properly set
             if (!data.session) {
                 throw new Error('Login successful but no session returned');
             }
@@ -157,9 +182,11 @@ class PetrolCostTracker {
             this.showAppScreen();
 
         } catch (error) {
-            console.error('Login error:', error);
-            this.showError(this.elements.loginError, 
-                error.message.includes('Invalid') ? 'Invalid username or password' : 'Login failed');
+            this.logError('Login error', error);
+            const errorMessage = error.message.includes('Invalid') ? 
+                'Invalid username or password' : 
+                'Login failed. Please try again.';
+            this.showError(this.elements.loginError, errorMessage);
         } finally {
             this.toggleElement(this.elements.loadingIndicator, false);
         }
@@ -167,11 +194,13 @@ class PetrolCostTracker {
 
     async handleLogout() {
         try {
-            await this.supabaseClient.auth.signOut();
+            const { error } = await this.supabaseClient.auth.signOut();
+            if (error) throw error;
+            
             this.currentUser = null;
             this.showAuthScreen();
         } catch (error) {
-            console.error('Logout failed:', error);
+            this.logError('Logout failed', error);
             alert('Logout failed. Please try again.');
         }
     }
@@ -203,12 +232,12 @@ class PetrolCostTracker {
         const petrolPrice = parseFloat(this.elements.petrolPriceInput?.value);
 
         if (isNaN(distance) || distance <= 0) {
-            this.showError(this.elements.resultContainer, 'Please enter a valid distance');
+            this.showError(this.elements.resultContainer, 'Please enter a valid distance (greater than 0)');
             return;
         }
 
         if (isNaN(petrolPrice) || petrolPrice <= 0) {
-            this.showError(this.elements.resultContainer, 'Please enter a valid petrol price');
+            this.showError(this.elements.resultContainer, 'Please enter a valid petrol price (greater than 0)');
             return;
         }
 
@@ -218,41 +247,51 @@ class PetrolCostTracker {
             const litersUsed = distance / CONFIG.FUEL_EFFICIENCY;
             const totalCost = litersUsed * petrolPrice;
 
-            // Get current session first
+            // Verify session and user
             const { data: { session }, error: sessionError } = await this.supabaseClient.auth.getSession();
-            if (sessionError || !session) throw new Error('No valid session');
+            if (sessionError || !session) {
+                throw new Error('Session invalid: ' + (sessionError?.message || 'No active session'));
+            }
 
-            // Then get user
             const { data: { user }, error: userError } = await this.supabaseClient.auth.getUser();
-            if (userError || !user) throw userError || new Error('No user found');
+            if (userError || !user) {
+                throw new Error('User not found: ' + (userError?.message || 'No user data'));
+            }
 
-            // Prepare the data object with correct field names
+            // Prepare trip data with explicit types
             const tripData = {
                 user_id: user.id,
-                distance: distance,
-                petrol_price: petrolPrice,
+                distance: parseFloat(distance.toFixed(2)),
+                petrol_price: parseFloat(petrolPrice.toFixed(2)),
                 total_cost: parseFloat(totalCost.toFixed(2)),
                 litres_used: parseFloat(litersUsed.toFixed(2)),
-                created_at: new Date().toISOString()  // Add timestamp
+                created_at: new Date().toISOString()
             };
 
-            // Debug: Log the data being sent
-            console.log('Submitting trip data:', tripData);
+            console.log('Attempting to submit trip:', tripData);
 
             const { data, error } = await this.supabaseClient
                 .from('trips')
                 .insert(tripData)
-                .select();  // Add .select() to return the inserted record
+                .select();
 
-            if (error) throw error;
+            if (error) {
+                console.error('Supabase insertion error details:', {
+                    code: error.code,
+                    details: error.details,
+                    hint: error.hint,
+                    message: error.message
+                });
+                throw error;
+            }
 
-            // Debug: Log the response
-            console.log('Trip submission response:', data);
+            console.log('Trip successfully recorded:', data);
 
+            // Display results
             if (this.elements.resultContainer) {
                 this.elements.resultContainer.innerHTML = `
                     <div class="result-item">
-                        <span>Distance:</span> ${distance} km
+                        <span>Distance:</span> ${distance.toFixed(1)} km
                     </div>
                     <div class="result-item">
                         <span>Petrol Price:</span> R${petrolPrice.toFixed(2)}/L
@@ -266,14 +305,21 @@ class PetrolCostTracker {
                 `;
             }
 
+            // Clear form
             if (this.elements.distanceInput) this.elements.distanceInput.value = '';
             if (this.elements.petrolPriceInput) this.elements.petrolPriceInput.value = '';
 
+            // Refresh history
             await this.loadTripHistory();
 
         } catch (error) {
-            console.error('Trip submission error:', error);
-            this.showError(this.elements.resultContainer, 'Failed to record trip. Please try again.');
+            this.logError('Trip submission failed', error);
+            
+            let errorMessage = 'Failed to record trip';
+            if (error.message) errorMessage += `: ${error.message}`;
+            if (error.details) errorMessage += ` (${error.details})`;
+            
+            this.showError(this.elements.resultContainer, errorMessage);
         } finally {
             this.toggleElement(this.elements.loadingIndicator, false);
         }
@@ -284,14 +330,18 @@ class PetrolCostTracker {
             this.toggleElement(this.elements.loadingIndicator, true);
             if (this.elements.tripsContainer) this.elements.tripsContainer.innerHTML = '';
 
-            // First get session to ensure we're authenticated
+            // Verify session and user
             const { data: { session }, error: sessionError } = await this.supabaseClient.auth.getSession();
-            if (sessionError || !session) throw new Error('No valid session');
+            if (sessionError || !session) {
+                throw new Error('Session invalid: ' + (sessionError?.message || 'No active session'));
+            }
 
-            // Then get user
             const { data: { user }, error: userError } = await this.supabaseClient.auth.getUser();
-            if (userError || !user) throw userError || new Error('No user found');
+            if (userError || !user) {
+                throw new Error('User not found: ' + (userError?.message || 'No user data'));
+            }
 
+            // Build query
             let query = this.supabaseClient
                 .from('trips')
                 .select('*')
@@ -304,6 +354,7 @@ class PetrolCostTracker {
             const { data: trips, error } = await query;
             if (error) throw error;
 
+            // Display results
             if (!trips || trips.length === 0) {
                 if (this.elements.tripsContainer) {
                     this.elements.tripsContainer.innerHTML = '<div class="no-trips">No trips recorded yet</div>';
@@ -337,7 +388,7 @@ class PetrolCostTracker {
             }
 
         } catch (error) {
-            console.error('Failed to load trip history:', error);
+            this.logError('Failed to load trip history', error);
             if (this.elements.tripsContainer) {
                 this.elements.tripsContainer.innerHTML = '<div class="error-message">Failed to load trip history</div>';
             }
@@ -351,7 +402,9 @@ class PetrolCostTracker {
 
         try {
             const { data: { user }, error: userError } = await this.supabaseClient.auth.getUser();
-            if (userError || !user) throw userError || new Error('No user found');
+            if (userError || !user) {
+                throw new Error('User not found: ' + (userError?.message || 'No user data'));
+            }
 
             const { error } = await this.supabaseClient
                 .from('trips')
@@ -364,13 +417,14 @@ class PetrolCostTracker {
             alert('Your trip history has been cleared');
 
         } catch (error) {
-            console.error('Failed to clear history:', error);
-            alert('Failed to clear trip history');
+            this.logError('Failed to clear history', error);
+            alert('Failed to clear trip history: ' + (error.message || 'Unknown error'));
         }
     }
 
     async adminClearAllHistory() {
-        if (!this.currentUser?.isAdmin || !confirm('Are you sure you want to clear ALL trip history?')) return;
+        if (!this.currentUser?.isAdmin) return;
+        if (!confirm('Are you sure you want to clear ALL trip history?')) return;
 
         try {
             const { error } = await this.supabaseClient
@@ -384,16 +438,14 @@ class PetrolCostTracker {
             alert('All trip history has been cleared');
 
         } catch (error) {
-            console.error('Failed to clear all history:', error);
-            alert('Failed to clear all trip history');
+            this.logError('Failed to clear all history', error);
+            alert('Failed to clear all trip history: ' + (error.message || 'Unknown error'));
         }
     }
 
     async checkAuthState() {
         try {
-            // First try to get the session
             const { data: { session }, error: sessionError } = await this.supabaseClient.auth.getSession();
-            
             if (sessionError) throw sessionError;
 
             if (session) {
@@ -407,10 +459,9 @@ class PetrolCostTracker {
                 return;
             }
 
-            // If no session, show auth screen
             this.showAuthScreen();
         } catch (error) {
-            console.error('Auth check failed:', error);
+            this.logError('Auth check failed', error);
             this.showAuthScreen();
         }
     }
