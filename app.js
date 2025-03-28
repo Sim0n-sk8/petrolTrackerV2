@@ -174,9 +174,21 @@ class PetrolCostTracker {
                 throw new Error('Login successful but no session returned');
             }
 
+            // Get the user's profile from the public.users table
+            const { data: profile, error: profileError } = await this.supabaseClient
+                .from('users')
+                .select('username, is_admin')
+                .eq('auth_uid', data.user.id)
+                .single();
+
+            if (profileError || !profile) {
+                throw new Error('Failed to load user profile');
+            }
+
             this.currentUser = {
-                username: username.charAt(0).toUpperCase() + username.slice(1),
-                isAdmin: CONFIG.ADMIN_USERS.includes(username)
+                id: data.user.id,
+                username: profile.username,
+                isAdmin: profile.is_admin || CONFIG.ADMIN_USERS.includes(username)
             };
 
             this.showAppScreen();
@@ -258,16 +270,25 @@ class PetrolCostTracker {
                 throw new Error('User not found: ' + (userError?.message || 'No user data'));
             }
 
-            // Prepare trip data - removed litres_used as it's not in the schema
+            // Get the user's public profile ID
+            const { data: profile, error: profileError } = await this.supabaseClient
+                .from('users')
+                .select('id')
+                .eq('auth_uid', user.id)
+                .single();
+
+            if (profileError || !profile) {
+                throw new Error('Failed to load user profile');
+            }
+
+            // Prepare trip data with explicit types
             const tripData = {
-                user_id: user.id,
+                user_id: profile.id,
                 distance: parseFloat(distance.toFixed(2)),
                 petrol_price: parseFloat(petrolPrice.toFixed(2)),
-                total_cost: parseFloat(totalCost.toFixed(2)),
-                created_at: new Date().toISOString()
+                litres_used: parseFloat(litersUsed.toFixed(2)),
+                total_cost: parseFloat(totalCost.toFixed(2))
             };
-
-            console.log('Attempting to submit trip:', tripData);
 
             const { data, error } = await this.supabaseClient
                 .from('trips')
@@ -283,8 +304,6 @@ class PetrolCostTracker {
                 });
                 throw error;
             }
-
-            console.log('Trip successfully recorded:', data);
 
             // Display results
             if (this.elements.resultContainer) {
@@ -343,11 +362,30 @@ class PetrolCostTracker {
             // Build query
             let query = this.supabaseClient
                 .from('trips')
-                .select('*')
+                .select(`
+                    id,
+                    distance,
+                    petrol_price,
+                    litres_used,
+                    total_cost,
+                    created_at,
+                    user:users(username)
+                `)
                 .order('created_at', { ascending: false });
 
             if (!this.currentUser.isAdmin) {
-                query = query.eq('user_id', user.id);
+                // For regular users, only show their own trips
+                const { data: profile, error: profileError } = await this.supabaseClient
+                    .from('users')
+                    .select('id')
+                    .eq('auth_uid', user.id)
+                    .single();
+
+                if (profileError || !profile) {
+                    throw new Error('Failed to load user profile');
+                }
+
+                query = query.eq('user_id', profile.id);
             }
 
             const { data: trips, error } = await query;
@@ -369,7 +407,13 @@ class PetrolCostTracker {
                 if (this.elements.tripsContainer) {
                     const tripElement = document.createElement('div');
                     tripElement.className = 'trip-item';
+                    
+                    // For admin users, show who created the trip
+                    const userInfo = this.currentUser.isAdmin ? 
+                        `<div class="trip-user">${trip.user.username}</div>` : '';
+                    
                     tripElement.innerHTML = `
+                        ${userInfo}
                         <div class="trip-date">${new Date(trip.created_at).toLocaleDateString()}</div>
                         <div class="trip-details">
                             <span>${trip.distance} km</span>
@@ -405,10 +449,21 @@ class PetrolCostTracker {
                 throw new Error('User not found: ' + (userError?.message || 'No user data'));
             }
 
+            // Get the user's public profile ID
+            const { data: profile, error: profileError } = await this.supabaseClient
+                .from('users')
+                .select('id')
+                .eq('auth_uid', user.id)
+                .single();
+
+            if (profileError || !profile) {
+                throw new Error('Failed to load user profile');
+            }
+
             const { error } = await this.supabaseClient
                 .from('trips')
                 .delete()
-                .eq('user_id', user.id);
+                .eq('user_id', profile.id);
 
             if (error) throw error;
 
@@ -448,12 +503,23 @@ class PetrolCostTracker {
             if (sessionError) throw sessionError;
 
             if (session) {
-                const username = session.user.email.split('@')[0].toLowerCase();
-                
+                // Get the user's profile from the public.users table
+                const { data: profile, error: profileError } = await this.supabaseClient
+                    .from('users')
+                    .select('username, is_admin')
+                    .eq('auth_uid', session.user.id)
+                    .single();
+
+                if (profileError || !profile) {
+                    throw new Error('Failed to load user profile');
+                }
+
                 this.currentUser = {
-                    username: username.charAt(0).toUpperCase() + username.slice(1),
-                    isAdmin: CONFIG.ADMIN_USERS.includes(username)
+                    id: session.user.id,
+                    username: profile.username,
+                    isAdmin: profile.is_admin || CONFIG.ADMIN_USERS.includes(profile.username.toLowerCase())
                 };
+                
                 this.showAppScreen();
                 return;
             }
