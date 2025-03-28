@@ -258,13 +258,12 @@ class PetrolCostTracker {
                 throw new Error('User not found: ' + (userError?.message || 'No user data'));
             }
 
-            // Prepare trip data with explicit types
+            // Prepare trip data - removed litres_used as it's not in the schema
             const tripData = {
                 user_id: user.id,
                 distance: parseFloat(distance.toFixed(2)),
                 petrol_price: parseFloat(petrolPrice.toFixed(2)),
                 total_cost: parseFloat(totalCost.toFixed(2)),
-                litres_used: parseFloat(litersUsed.toFixed(2)),
                 created_at: new Date().toISOString()
             };
 
