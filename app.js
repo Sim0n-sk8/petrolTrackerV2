@@ -55,9 +55,6 @@ class PetrolCostTracker {
                 }
             );
 
-            // Try to recover session first
-            await this.recoverSession();
-
             // Set up event listeners
             this.setupEventListeners();
 
@@ -67,27 +64,6 @@ class PetrolCostTracker {
         } catch (error) {
             console.error('Initialization failed:', error);
             this.showErrorScreen('Application failed to initialize. Please refresh the page.');
-        }
-    }
-
-    async recoverSession() {
-        try {
-            const { data: { session }, error } = await this.supabaseClient.auth.getSession();
-            if (error) throw error;
-            if (session) return session;
-            
-            // If no session, check for user
-            const { data: { user } } = await this.supabaseClient.auth.getUser();
-            if (user) {
-                // Attempt to refresh the session
-                const { data: refreshedSession, error: refreshError } = 
-                    await this.supabaseClient.auth.refreshSession();
-                if (refreshError) throw refreshError;
-                return refreshedSession;
-            }
-        } catch (error) {
-            console.log('Session recovery attempt failed:', error);
-            return null;
         }
     }
 
@@ -242,20 +218,36 @@ class PetrolCostTracker {
             const litersUsed = distance / CONFIG.FUEL_EFFICIENCY;
             const totalCost = litersUsed * petrolPrice;
 
-            const { data: { user }, error: userError } = await this.supabaseClient.auth.getUser();
-            if (userError) throw userError;
+            // Get current session first
+            const { data: { session }, error: sessionError } = await this.supabaseClient.auth.getSession();
+            if (sessionError || !session) throw new Error('No valid session');
 
-            const { error } = await this.supabaseClient
+            // Then get user
+            const { data: { user }, error: userError } = await this.supabaseClient.auth.getUser();
+            if (userError || !user) throw userError || new Error('No user found');
+
+            // Prepare the data object with correct field names
+            const tripData = {
+                user_id: user.id,
+                distance: distance,
+                petrol_price: petrolPrice,
+                total_cost: parseFloat(totalCost.toFixed(2)),
+                litres_used: parseFloat(litersUsed.toFixed(2)),
+                created_at: new Date().toISOString()  // Add timestamp
+            };
+
+            // Debug: Log the data being sent
+            console.log('Submitting trip data:', tripData);
+
+            const { data, error } = await this.supabaseClient
                 .from('trips')
-                .insert({
-                    user_id: user.id,
-                    distance,
-                    petrol_price: petrolPrice,
-                    total_cost: parseFloat(totalCost.toFixed(2)),
-                    litres_used: parseFloat(litersUsed.toFixed(2))
-                });
+                .insert(tripData)
+                .select();  // Add .select() to return the inserted record
 
             if (error) throw error;
+
+            // Debug: Log the response
+            console.log('Trip submission response:', data);
 
             if (this.elements.resultContainer) {
                 this.elements.resultContainer.innerHTML = `
@@ -292,8 +284,13 @@ class PetrolCostTracker {
             this.toggleElement(this.elements.loadingIndicator, true);
             if (this.elements.tripsContainer) this.elements.tripsContainer.innerHTML = '';
 
+            // First get session to ensure we're authenticated
+            const { data: { session }, error: sessionError } = await this.supabaseClient.auth.getSession();
+            if (sessionError || !session) throw new Error('No valid session');
+
+            // Then get user
             const { data: { user }, error: userError } = await this.supabaseClient.auth.getUser();
-            if (userError) throw userError;
+            if (userError || !user) throw userError || new Error('No user found');
 
             let query = this.supabaseClient
                 .from('trips')
@@ -354,7 +351,7 @@ class PetrolCostTracker {
 
         try {
             const { data: { user }, error: userError } = await this.supabaseClient.auth.getUser();
-            if (userError) throw userError;
+            if (userError || !user) throw userError || new Error('No user found');
 
             const { error } = await this.supabaseClient
                 .from('trips')
@@ -410,22 +407,8 @@ class PetrolCostTracker {
                 return;
             }
 
-            // If no session, try to get the user (fallback)
-            const { data: { user }, error: userError } = await this.supabaseClient.auth.getUser();
-            
-            if (userError) throw userError;
-
-            if (user) {
-                const username = user.email.split('@')[0].toLowerCase();
-                
-                this.currentUser = {
-                    username: username.charAt(0).toUpperCase() + username.slice(1),
-                    isAdmin: CONFIG.ADMIN_USERS.includes(username)
-                };
-                this.showAppScreen();
-            } else {
-                this.showAuthScreen();
-            }
+            // If no session, show auth screen
+            this.showAuthScreen();
         } catch (error) {
             console.error('Auth check failed:', error);
             this.showAuthScreen();
