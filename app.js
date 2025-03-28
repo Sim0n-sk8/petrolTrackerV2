@@ -41,17 +41,22 @@ class PetrolCostTracker {
 
     async initialize() {
         try {
-            // Initialize Supabase client
+            // Initialize Supabase client with enhanced session handling
             this.supabaseClient = supabase.createClient(
                 CONFIG.SUPABASE_URL, 
                 CONFIG.SUPABASE_ANON_KEY,
                 {
                     auth: {
                         persistSession: true,
-                        autoRefreshToken: true
+                        autoRefreshToken: true,
+                        detectSessionInUrl: true,
+                        storage: localStorage
                     }
                 }
             );
+
+            // Try to recover session first
+            await this.recoverSession();
 
             // Set up event listeners
             this.setupEventListeners();
@@ -62,6 +67,27 @@ class PetrolCostTracker {
         } catch (error) {
             console.error('Initialization failed:', error);
             this.showErrorScreen('Application failed to initialize. Please refresh the page.');
+        }
+    }
+
+    async recoverSession() {
+        try {
+            const { data: { session }, error } = await this.supabaseClient.auth.getSession();
+            if (error) throw error;
+            if (session) return session;
+            
+            // If no session, check for user
+            const { data: { user } } = await this.supabaseClient.auth.getUser();
+            if (user) {
+                // Attempt to refresh the session
+                const { data: refreshedSession, error: refreshError } = 
+                    await this.supabaseClient.auth.refreshSession();
+                if (refreshError) throw refreshError;
+                return refreshedSession;
+            }
+        } catch (error) {
+            console.log('Session recovery attempt failed:', error);
+            return null;
         }
     }
 
@@ -135,12 +161,17 @@ class PetrolCostTracker {
             this.toggleElement(this.elements.loadingIndicator, true);
             this.showError(this.elements.loginError, '');
 
-            const { error } = await this.supabaseClient.auth.signInWithPassword({
+            const { data, error } = await this.supabaseClient.auth.signInWithPassword({
                 email: `${username}@petroltracker.com`,
                 password: password
             });
 
             if (error) throw error;
+
+            // Ensure session is properly set
+            if (!data.session) {
+                throw new Error('Login successful but no session returned');
+            }
 
             this.currentUser = {
                 username: username.charAt(0).toUpperCase() + username.slice(1),
@@ -363,9 +394,26 @@ class PetrolCostTracker {
 
     async checkAuthState() {
         try {
-            const { data: { user }, error } = await this.supabaseClient.auth.getUser();
+            // First try to get the session
+            const { data: { session }, error: sessionError } = await this.supabaseClient.auth.getSession();
             
-            if (error) throw error;
+            if (sessionError) throw sessionError;
+
+            if (session) {
+                const username = session.user.email.split('@')[0].toLowerCase();
+                
+                this.currentUser = {
+                    username: username.charAt(0).toUpperCase() + username.slice(1),
+                    isAdmin: CONFIG.ADMIN_USERS.includes(username)
+                };
+                this.showAppScreen();
+                return;
+            }
+
+            // If no session, try to get the user (fallback)
+            const { data: { user }, error: userError } = await this.supabaseClient.auth.getUser();
+            
+            if (userError) throw userError;
 
             if (user) {
                 const username = user.email.split('@')[0].toLowerCase();
