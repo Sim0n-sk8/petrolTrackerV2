@@ -60,6 +60,29 @@
         </div>
     </div>
 
+    <!-- Add these to your existing HTML -->
+    <div id="admin-panel" style="display: none;">
+        <h3>Admin Panel</h3>
+        <div class="admin-actions">
+            <button id="refresh-history">Refresh All History</button>
+            <button id="export-csv">Export as CSV</button>
+            <button id="export-json">Export as JSON</button>
+            <button id="user-management">User Management</button>
+        </div>
+        <div id="admin-content"></div>
+    </div>
+    
+    <div id="profile-section" style="display: none;">
+        <h3>My Profile</h3>
+        <div id="profile-info"></div>
+        <button id="change-password">Change Password</button>
+        <button id="update-profile">Update Profile</button>
+    </div>
+    
+    <div id="password-reset-container">
+        <a href="#" id="forgot-password">Forgot Password?</a>
+    </div>
+
     <script src="app.js"></script>
 </body>
 
